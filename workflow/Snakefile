@@ -1,0 +1,291 @@
+import glob
+import os
+
+
+BUILDER_CONFIG = os.environ.get("GAB_CONFIG", "config/config.yaml")
+configfile: BUILDER_CONFIG
+
+REPO_ROOT = os.path.abspath(os.path.join(workflow.basedir, os.pardir))
+PYTHON_SOURCE = os.path.join(REPO_ROOT, "src")
+SOURCE_RUNNER = os.path.join(REPO_ROOT, "scripts", "gab_from_source.py")
+RULE_ENV = "envs/gab.yaml"
+WORK_DIR = config["project"]["work_dir"]
+LOG_DIR = os.path.join(WORK_DIR, "snakemake", "logs")
+MARKER_DIR = os.path.join(WORK_DIR, "snakemake", "resources")
+BUNDLE = os.path.join(config["project"]["output_dir"], config["project"]["bundle_name"])
+INPUT_VCF = config["input"]["vcf"]
+REFERENCE_FASTA = config["reference"]["fasta"]
+IMPLEMENTATION_INPUTS = sorted(
+    path
+    for path in glob.glob(
+        os.path.join(PYTHON_SOURCE, "genome_annotation_builder", "**", "*"),
+        recursive=True,
+    )
+    if os.path.isfile(path)
+    and "__pycache__" not in path.split(os.sep)
+    and not path.endswith((".pyc", ".pyo"))
+)
+WORKFLOW_INPUTS = [
+    os.path.join(REPO_ROOT, "workflow", "Snakefile"),
+    os.path.join(REPO_ROOT, "workflow", "envs", "gab.yaml"),
+    os.path.join(REPO_ROOT, "pyproject.toml"),
+    os.path.join(REPO_ROOT, "uv.lock"),
+]
+
+PINNED_RESOURCE_MARKER = os.path.join(MARKER_DIR, "genome_spec.json")
+VEP = config.get("annotation", {}).get("vep", {})
+VEP_ENABLED = bool(VEP.get("enabled", False))
+VEP_RESOURCE_MARKER = os.path.join(MARKER_DIR, "vep.json")
+PREDICTORS = config.get("annotation", {}).get("predictors", {})
+PREDICTOR_NAMES = ("loftee", "cadd", "revel", "alphamissense", "spliceai")
+PREDICTORS_ENABLED = any(
+    bool(PREDICTORS.get(name, {}).get("enabled", False)) for name in PREDICTOR_NAMES
+)
+PREDICTOR_RESOURCE_MARKER = os.path.join(MARKER_DIR, "predictors.json")
+PREDICTOR_DOCTOR_MARKER = os.path.join(MARKER_DIR, "predictor_doctor.json")
+CLINVAR = config.get("annotation", {}).get("clinvar", {})
+CLINVAR_ENABLED = bool(CLINVAR.get("enabled", False))
+CLINVAR_RESOURCE_MARKER = os.path.join(MARKER_DIR, "clinvar.json")
+CLINGEN = config.get("annotation", {}).get("clingen", {})
+CLINGEN_ENABLED = bool(CLINGEN.get("enabled", False))
+CLINGEN_RESOURCE_MARKER = os.path.join(MARKER_DIR, "clingen.json")
+ACMG_SF = config.get("annotation", {}).get("acmg_sf", {})
+ACMG_SF_ENABLED = bool(ACMG_SF.get("enabled", False))
+ACMG_SF_RESOURCE_MARKER = os.path.join(MARKER_DIR, "acmg_sf.json")
+GWAS = config.get("annotation", {}).get("gwas", {})
+GWAS_ENABLED = bool(GWAS.get("enabled", False))
+GWAS_RESOURCE_MARKER = os.path.join(MARKER_DIR, "gwas.json")
+PGS = config.get("annotation", {}).get("pgs", {})
+PGS_ENABLED = bool(PGS.get("enabled", False))
+PGS_RESOURCE_MARKER = os.path.join(MARKER_DIR, "pgs.json")
+PGS_INPUTS = []
+if PGS_ENABLED:
+    for model in PGS.get("models", []):
+        PGS_INPUTS.append(model["scoring_file"])
+        calibration = model.get("calibration")
+        if calibration:
+            PGS_INPUTS.append(calibration["file"])
+PGX = config.get("annotation", {}).get("pgx", {})
+PGX_ENABLED = bool(PGX.get("enabled", False))
+PGX_CPIC_PAIRS = PGX.get("cpic", {}).get("pairs_json")
+PGX_RESOURCE_MARKER = os.path.join(MARKER_DIR, "pgx.json")
+PHARMCAT_RUNTIME_MARKER = os.path.join(MARKER_DIR, "pharmcat_runtime.json")
+
+BUNDLE_RESOURCE_INPUTS = [PINNED_RESOURCE_MARKER]
+if VEP_ENABLED:
+    BUNDLE_RESOURCE_INPUTS.append(VEP_RESOURCE_MARKER)
+if PREDICTORS_ENABLED:
+    BUNDLE_RESOURCE_INPUTS.extend([PREDICTOR_RESOURCE_MARKER, PREDICTOR_DOCTOR_MARKER])
+if CLINVAR_ENABLED:
+    BUNDLE_RESOURCE_INPUTS.append(CLINVAR_RESOURCE_MARKER)
+if CLINGEN_ENABLED:
+    BUNDLE_RESOURCE_INPUTS.append(CLINGEN_RESOURCE_MARKER)
+if ACMG_SF_ENABLED:
+    BUNDLE_RESOURCE_INPUTS.append(ACMG_SF_RESOURCE_MARKER)
+if GWAS_ENABLED:
+    BUNDLE_RESOURCE_INPUTS.append(GWAS_RESOURCE_MARKER)
+if PGS_ENABLED:
+    BUNDLE_RESOURCE_INPUTS.append(PGS_RESOURCE_MARKER)
+if PGX_ENABLED:
+    BUNDLE_RESOURCE_INPUTS.extend([PGX_RESOURCE_MARKER, PHARMCAT_RUNTIME_MARKER])
+
+
+rule all:
+    input:
+        resources=BUNDLE_RESOURCE_INPUTS,
+        config=BUILDER_CONFIG,
+        runner=SOURCE_RUNNER,
+        vcf=INPUT_VCF,
+        reference=REFERENCE_FASTA,
+        reference_index=REFERENCE_FASTA + ".fai",
+        implementation=IMPLEMENTATION_INPUTS,
+        workflow=WORKFLOW_INPUTS,
+    log:
+        os.path.join(LOG_DIR, "genome_bundle.log"),
+    conda:
+        RULE_ENV
+    shell:
+        "python {input.runner:q} build --config {input.config:q} > {log:q} 2>&1"
+
+
+rule pinned_resources:
+    input:
+        config=BUILDER_CONFIG,
+        runner=SOURCE_RUNNER,
+    output:
+        PINNED_RESOURCE_MARKER,
+    log:
+        os.path.join(LOG_DIR, "pinned_resources.log"),
+    conda:
+        RULE_ENV
+    shell:
+        "python {input.runner:q} resources sync --config {input.config:q} "
+        "> {output:q} 2> {log:q}"
+
+
+if VEP_ENABLED:
+    rule vep_cache:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+        output:
+            VEP_RESOURCE_MARKER,
+        log:
+            os.path.join(LOG_DIR, "vep_cache.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources vep-sync --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+if PREDICTORS_ENABLED:
+    rule predictor_resources:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+            vep=VEP_RESOURCE_MARKER,
+        output:
+            PREDICTOR_RESOURCE_MARKER,
+        log:
+            os.path.join(LOG_DIR, "predictors.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources predictors-sync --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+    rule predictor_doctor:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+            resources=PREDICTOR_RESOURCE_MARKER,
+        output:
+            PREDICTOR_DOCTOR_MARKER,
+        log:
+            os.path.join(LOG_DIR, "predictor_doctor.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources predictors-doctor --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+if CLINVAR_ENABLED:
+    rule clinvar:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+        output:
+            CLINVAR_RESOURCE_MARKER,
+        log:
+            os.path.join(LOG_DIR, "clinvar.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources clinvar-sync --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+if CLINGEN_ENABLED:
+    rule clingen:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+            vep=VEP_RESOURCE_MARKER,
+        output:
+            CLINGEN_RESOURCE_MARKER,
+        log:
+            os.path.join(LOG_DIR, "clingen.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources clingen-sync --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+if ACMG_SF_ENABLED:
+    rule acmg_sf:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+            resources=(
+                [CLINVAR_RESOURCE_MARKER, VEP_RESOURCE_MARKER]
+                if CLINVAR_ENABLED and VEP_ENABLED
+                else []
+            ),
+        output:
+            ACMG_SF_RESOURCE_MARKER,
+        log:
+            os.path.join(LOG_DIR, "acmg_sf.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources acmg-sf-sync --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+if GWAS_ENABLED:
+    rule gwas_catalog:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+        output:
+            GWAS_RESOURCE_MARKER,
+        log:
+            os.path.join(LOG_DIR, "gwas.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources gwas-sync --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+if PGS_ENABLED:
+    rule pgs_resources:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+            models=PGS_INPUTS,
+        output:
+            PGS_RESOURCE_MARKER,
+        log:
+            os.path.join(LOG_DIR, "pgs.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources pgs-verify --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+if PGX_ENABLED:
+    rule pgx_resources:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+            cpic=PGX_CPIC_PAIRS,
+        output:
+            PGX_RESOURCE_MARKER,
+        log:
+            os.path.join(LOG_DIR, "pgx.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources pgx-sync --config {input.config:q} "
+            "> {output:q} 2> {log:q}"
+
+
+    rule pharmcat_runtime:
+        input:
+            config=BUILDER_CONFIG,
+            runner=SOURCE_RUNNER,
+        output:
+            PHARMCAT_RUNTIME_MARKER,
+        log:
+            os.path.join(LOG_DIR, "pharmcat_runtime.log"),
+        conda:
+            RULE_ENV
+        shell:
+            "python {input.runner:q} resources pharmcat-sync --config {input.config:q} "
+            "> {output:q} 2> {log:q}"

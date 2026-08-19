@@ -1,0 +1,642 @@
+#!/usr/bin/env python3
+"""
+genome-convert — Convert an annotated VCF to a .genome/1.1 bundle.
+
+Usage:
+  genome-convert input.vcf.gz \\
+    --reference GRCh38.fa \\
+    --out /path/to/output/
+
+Inputs:
+  - input.vcf.gz: bgzipped, tabix-indexed, GRCh38, VEP-annotated VCF.
+    Required INFO fields: CSQ (VEP), with sub-fields including SYMBOL,
+    Consequence, IMPACT, HGVSc, HGVSp, gnomAD_AF, gnomAD_AF_popmax,
+    CADD_PHRED, REVEL, AlphaMissense, SpliceAI_pred_DS_max,
+    CLNSIG, CLNREVSTAT, CLNCONFLICTED.
+
+  - reference: GRCh38.fa with .fai index. Used for normalisation.
+
+Outputs:
+  /path/to/output/
+    manifest.json
+    schema.json
+    variants.parquet/  (hive-partitioned by chrom)
+    pharmacogenomics.parquet  (if --pharmcat)
+    gene_index.parquet
+    prs.parquet  (if --prs-config provided)
+    findings.json
+    conversion.log
+
+This is a reference implementation. It demonstrates the .genome/1.1 conversion
+pattern with sensible defaults; production deployments will customise the
+consensus rules, gene lists, and PGx caller per their own pipeline.
+
+Run `genome-convert --help` for full options.
+"""
+
+import argparse
+import hashlib
+import json
+import logging
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterator, Optional
+
+# Defer heavy imports until needed
+log = logging.getLogger("genome-convert")
+
+
+# ---------- Defaults (also written to manifest) ----------
+
+DEFAULT_RULES = {
+    "is_rare": {
+        "rule": "gnomad_af_popmax < 0.01; null AF treated as rare",
+        "threshold": 0.01,
+        "population": "gnomad_af_popmax",
+        "null_treatment": "rare",
+    },
+    "is_actionable": {
+        "rule": "gene ∈ ACMG SF v3.2 AND clinvar_significance ∈ {Pathogenic, Likely_pathogenic} AND clinvar_review_stars >= 2",
+        "gene_list": "ACMG_SF_v3.2",
+        "significance_set": ["Pathogenic", "Likely_pathogenic"],
+        "min_review_stars": 2,
+    },
+    "consensus_damaging": {
+        "rule": "≥2 of REVEL/AlphaMissense/CADD exceed thresholds, missense only",
+        "applies_to": ["missense_variant"],
+        "tools": [
+            {"name": "REVEL", "field": "predictions.revel", "threshold": 0.75},
+            {"name": "AlphaMissense", "field": "predictions.alphamissense", "threshold": 0.564},
+            {"name": "CADD", "field": "predictions.cadd_phred", "threshold": 20.0},
+        ],
+        "aggregation": "at_least_n",
+        "n": 2,
+    },
+    "clinical_grade": {
+        "rule": "true iff backed by ACMG SF, CPIC, or ClinVar at >=2 review stars",
+        "qualifying_sources": [
+            {"source": "ACMG_SF_v3.2", "minimum_evidence": "gene_membership"},
+            {"source": "CPIC", "minimum_evidence": "level_A_or_B"},
+            {"source": "ClinVar", "minimum_evidence": "review_stars>=2"},
+        ],
+    },
+}
+
+ACMG_SF_V3_2 = {
+    # Cardiovascular
+    "APOB", "BAG3", "DSC2", "DSG2", "DSP", "FBN1", "FLNC", "GLA",
+    "KCNH2", "KCNQ1", "LDLR", "LMNA", "MYBPC3", "MYH11", "MYH7",
+    "MYL2", "MYL3", "PCSK9", "PKP2", "PRKAG2", "RBM20", "RYR2",
+    "SCN5A", "SMAD3", "TGFBR1", "TGFBR2", "TMEM43", "TNNI3",
+    "TNNT2", "TPM1", "TRDN", "TTN", "TTR",
+    # Cancer
+    "APC", "BMPR1A", "BRCA1", "BRCA2", "BRIP1", "CDH1", "DICER1",
+    "MAX", "MEN1", "MLH1", "MSH2", "MSH6", "MUTYH", "NF2", "PALB2",
+    "PMS2", "PTEN", "RAD51C", "RAD51D", "RB1", "RET", "SDHAF2",
+    "SDHB", "SDHC", "SDHD", "SMAD4", "STK11", "TMEM127", "TP53",
+    "TSC1", "TSC2", "VHL", "WT1",
+    # Metabolic
+    "ACTA2", "ACVRL1", "ATP7B", "BTD", "CASQ2", "ENG", "FBN1",
+    "GLA", "HFE", "HNF1A", "OTC", "RPE65", "RYR1",
+}
+
+
+# ---------- Conversion pipeline ----------
+
+def setup_logging(out_dir: Path, verbose: bool):
+    level = logging.DEBUG if verbose else logging.INFO
+    log.setLevel(level)
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    log.addHandler(handler)
+    file_handler = logging.FileHandler(out_dir / "conversion.log")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    log.addHandler(file_handler)
+
+
+def check_tool(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def normalize_vcf(input_vcf: Path, reference: Path, out_dir: Path) -> Path:
+    """Run bcftools norm -f reference --atomize. Returns path to normalised VCF."""
+    if not check_tool("bcftools"):
+        raise RuntimeError("bcftools not found in PATH. Install bcftools >=1.19.")
+
+    out_vcf = out_dir / "_normalized.vcf.gz"
+    cmd = [
+        "bcftools", "norm",
+        "-f", str(reference),
+        "--atomize",
+        "-Oz",
+        "-o", str(out_vcf),
+        str(input_vcf),
+    ]
+    log.info(f"normalizing: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
+    subprocess.run(["bcftools", "index", "-t", str(out_vcf)], check=True)
+    return out_vcf
+
+
+def parse_csq_header(vcf_path: Path) -> list[str]:
+    """Extract VEP CSQ field order from the VCF header."""
+    try:
+        from cyvcf2 import VCF
+    except ImportError:
+        raise RuntimeError("cyvcf2 not installed. Install with: pip install cyvcf2")
+
+    vcf = VCF(str(vcf_path))
+    header = vcf.raw_header
+    for line in header.split("\n"):
+        if "ID=CSQ" in line and "Description=" in line:
+            # Extract the "Format: ..." portion
+            desc = line.split('Description="', 1)[1].rsplit('"', 1)[0]
+            if "Format:" in desc:
+                fmt = desc.split("Format:", 1)[1].strip()
+                fields = [f.strip() for f in fmt.split("|")]
+                log.info(f"parsed CSQ header with {len(fields)} fields")
+                return fields
+    raise RuntimeError(
+        "CSQ header not found in VCF. The input must be VEP-annotated."
+    )
+
+
+def make_variant_id(chrom: str, pos: int, ref: str, alt: str) -> str:
+    if not chrom.startswith("chr"):
+        chrom = f"chr{chrom}"
+    return f"{chrom}:{pos}:{ref}:{alt}"
+
+
+def stream_variants(
+    vcf_path: Path, csq_fields: list[str], rules: dict, acmg_genes: set
+) -> Iterator[dict]:
+    """Yield variant dicts ready for Parquet writing."""
+    from cyvcf2 import VCF
+
+    vcf = VCF(str(vcf_path))
+
+    csq_idx = {name: i for i, name in enumerate(csq_fields)}
+
+    def csq_get(parts: list, key: str) -> Optional[str]:
+        idx = csq_idx.get(key)
+        if idx is None or idx >= len(parts):
+            return None
+        v = parts[idx]
+        return v if v else None
+
+    n_total = 0
+    n_emitted = 0
+    n_excluded = {"alt_contig": 0, "ref_mismatch": 0, "invalid_alleles": 0}
+
+    valid_chroms = {f"chr{i}" for i in range(1, 23)} | {"chrX", "chrY", "chrM"}
+
+    for v in vcf:
+        n_total += 1
+
+        chrom = v.CHROM if v.CHROM.startswith("chr") else f"chr{v.CHROM}"
+        if chrom not in valid_chroms:
+            n_excluded["alt_contig"] += 1
+            continue
+
+        # Pick first alt; bcftools norm should have split multiallelics
+        if not v.ALT:
+            continue
+        alt = v.ALT[0]
+        ref = v.REF
+
+        if not all(c in "ACGT" for c in (ref + alt).upper()):
+            n_excluded["invalid_alleles"] += 1
+            continue
+
+        variant_id = make_variant_id(chrom, v.POS, ref, alt)
+
+        # Genotype
+        try:
+            gts = v.genotypes[0]
+            gt = [int(gts[0]), int(gts[1])]
+            phased = bool(gts[2])
+        except Exception:
+            gt = [0, 0]
+            phased = False
+
+        if gt == [0, 0]:
+            zygosity = "hom_ref"
+        elif gt[0] != gt[1]:
+            zygosity = "het"
+        else:
+            zygosity = "hom_alt"
+
+        # Quality
+        try:
+            dp = int(v.format("DP")[0][0]) if v.format("DP") is not None else None
+        except Exception:
+            dp = None
+        try:
+            gq = int(v.format("GQ")[0][0]) if v.format("GQ") is not None else None
+        except Exception:
+            gq = None
+
+        if (dp is not None and dp < 20) or (gq is not None and gq < 40):
+            call_confidence = "low"
+        elif (dp is not None and dp < 30) or (gq is not None and gq < 60):
+            call_confidence = "medium"
+        else:
+            call_confidence = "high"
+
+        # CSQ — pick the canonical transcript annotation
+        csq_raw = v.INFO.get("CSQ")
+        gene_symbol = None
+        consequence_most_severe = None
+        impact = None
+        hgvsc = hgvsp = None
+        revel = alphamissense = cadd = spliceai = None
+        gnomad_af = gnomad_af_popmax = None
+        clnsig = clnrevstat = clnconflicted = None
+
+        if csq_raw:
+            # CSQ may have multiple comma-separated transcript annotations
+            transcript_strs = csq_raw.split(",")
+            chosen = None
+            for ts in transcript_strs:
+                parts = ts.split("|")
+                if csq_get(parts, "CANONICAL") == "YES":
+                    chosen = parts
+                    break
+            if chosen is None and transcript_strs:
+                chosen = transcript_strs[0].split("|")
+
+            if chosen:
+                gene_symbol = csq_get(chosen, "SYMBOL")
+                cons_raw = csq_get(chosen, "Consequence") or ""
+                consequence_most_severe = cons_raw.split("&")[0] if cons_raw else None
+                impact = csq_get(chosen, "IMPACT")
+                hgvsc = csq_get(chosen, "HGVSc")
+                hgvsp = csq_get(chosen, "HGVSp")
+                revel = _maybe_float(csq_get(chosen, "REVEL"))
+                alphamissense = _maybe_float(csq_get(chosen, "AlphaMissense"))
+                cadd = _maybe_float(csq_get(chosen, "CADD_PHRED"))
+                spliceai = _maybe_float(csq_get(chosen, "SpliceAI_pred_DS_max"))
+                gnomad_af = _maybe_float(csq_get(chosen, "gnomAD_AF"))
+                gnomad_af_popmax = _maybe_float(csq_get(chosen, "gnomAD_AF_popmax"))
+                clnsig = csq_get(chosen, "CLNSIG")
+                clnrevstat = csq_get(chosen, "CLNREVSTAT")
+                clnconflicted = csq_get(chosen, "CLNCONFLICTED")
+
+        # Normalise ClinVar significance
+        clinvar_sig = _normalize_clnsig(clnsig)
+        review_stars = _clnrevstat_to_stars(clnrevstat)
+        has_conflicts = (clnconflicted == "1") or (clinvar_sig == "Conflicting_interpretations")
+
+        # Apply rules
+        is_rare = (
+            (gnomad_af_popmax is None and rules["is_rare"]["null_treatment"] == "rare")
+            or (gnomad_af_popmax is not None and gnomad_af_popmax < rules["is_rare"]["threshold"])
+        )
+
+        is_actionable = (
+            gene_symbol in acmg_genes
+            and clinvar_sig in rules["is_actionable"]["significance_set"]
+            and (review_stars or 0) >= rules["is_actionable"]["min_review_stars"]
+        )
+
+        # consensus_damaging
+        cd_rule = rules["consensus_damaging"]
+        if consequence_most_severe in cd_rule["applies_to"]:
+            votes = 0
+            for tool in cd_rule["tools"]:
+                value = {"REVEL": revel, "AlphaMissense": alphamissense, "CADD": cadd}.get(tool["name"])
+                if value is not None and value > tool["threshold"]:
+                    votes += 1
+            consensus_damaging = votes >= cd_rule["n"]
+        else:
+            consensus_damaging = False
+
+        # clinical_grade — simple union of qualifying sources
+        clinical_grade = bool(
+            is_actionable
+            or (clinvar_sig in ("Pathogenic", "Likely_pathogenic", "Likely_benign", "Benign")
+                and (review_stars or 0) >= 2)
+        )
+
+        is_pgx = False  # set by PGx integration step downstream
+
+        n_emitted += 1
+        yield {
+            "variant_id": variant_id,
+            "chrom": chrom,
+            "pos": int(v.POS),
+            "ref": ref,
+            "alt": alt,
+            "variant_type": "SNV" if (len(ref) == 1 and len(alt) == 1)
+                           else "INS" if len(alt) > len(ref)
+                           else "DEL" if len(ref) > len(alt)
+                           else "MNV",
+            "rsid": v.ID if v.ID and v.ID.startswith("rs") else None,
+            "quality": {
+                "call_confidence": call_confidence,
+                "origin": "observed",
+                "imputation_r2": None,
+                "imputation_panel": None,
+                "dp": dp,
+                "gq": gq,
+            },
+            "genotype": {
+                "gt": gt,
+                "phased": phased,
+                "zygosity": zygosity,
+                "allele_balance": None,
+            },
+            "gene": {
+                "symbol": gene_symbol,
+                "ensembl_id": None,
+                "hgnc_id": None,
+                "biotype": None,
+                "is_canonical": True,
+            },
+            "consequence": {
+                "most_severe": consequence_most_severe,
+                "impact": impact,
+                "hgvsc": hgvsc,
+                "hgvsp": hgvsp,
+                "all_annotations": None,
+            },
+            "population_frequency": {
+                "gnomad_af": gnomad_af,
+                "gnomad_af_popmax": gnomad_af_popmax,
+                "gnomad_af_nfe": None,
+                "gnomad_af_eas": None,
+                "gnomad_af_afr": None,
+                "gnomad_af_sas": None,
+                "gnomad_af_amr": None,
+                "is_rare": is_rare,
+            },
+            "pathogenicity": {
+                "clinvar_significance": clinvar_sig,
+                "clinvar_has_conflicts": has_conflicts,
+                "clinvar_conflict_summary": None,
+                "clinvar_review_stars": review_stars,
+                "clinvar_submitters_count": None,
+                "clinvar_id": None,
+                "is_actionable": is_actionable,
+            },
+            "predictions": {
+                "cadd_phred": cadd,
+                "revel": revel,
+                "alphamissense": alphamissense,
+                "spliceai_max": spliceai,
+                "polyphen": None,
+                "sift": None,
+                "consensus_damaging": consensus_damaging,
+            },
+            "pharmacogenomics": {
+                "is_pgx": is_pgx,
+                "contributes_to_gene": None,
+            },
+            "trait_associations": {
+                "is_gwas_hit": False,
+                "traits": None,
+                "effect_size": None,
+                "effect_type": None,
+                "effect_allele": None,
+                "ci_lower": None,
+                "ci_upper": None,
+                "p_value": None,
+                "sample_size": None,
+                "study_pmids": None,
+            },
+            "clinical_grade": clinical_grade,
+        }
+
+    log.info(f"variants: total={n_total}, emitted={n_emitted}, excluded={n_excluded}")
+    return n_total, n_emitted, n_excluded
+
+
+def _maybe_float(s) -> Optional[float]:
+    if s is None or s == "":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _normalize_clnsig(s: Optional[str]) -> Optional[str]:
+    if not s:
+        return None
+    s_lower = s.lower()
+    if "pathogenic" in s_lower and "likely" not in s_lower and "/" not in s_lower:
+        return "Pathogenic"
+    if "likely_pathogenic" in s_lower or "likely pathogenic" in s_lower:
+        return "Likely_pathogenic"
+    if "uncertain" in s_lower:
+        return "Uncertain_significance"
+    if "likely_benign" in s_lower:
+        return "Likely_benign"
+    if s_lower == "benign" or s_lower == "benign,_other":
+        return "Benign"
+    if "conflicting" in s_lower:
+        return "Conflicting_interpretations"
+    return None
+
+
+def _clnrevstat_to_stars(s: Optional[str]) -> Optional[int]:
+    if not s:
+        return None
+    mapping = {
+        "practice_guideline": 4,
+        "reviewed_by_expert_panel": 3,
+        "criteria_provided,_multiple_submitters,_no_conflicts": 2,
+        "criteria_provided,_conflicting_interpretations": 1,
+        "criteria_provided,_single_submitter": 1,
+        "no_assertion_criteria_provided": 0,
+        "no_assertion_provided": 0,
+    }
+    return mapping.get(s.strip(), None)
+
+
+def write_bundle(rows_iter, out_dir: Path, rules: dict, sources: dict, acmg_genes: set):
+    """Materialise rows into Parquet partitions, build gene_index, write manifest."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rows = list(rows_iter)  # for v1, materialise; future: stream-write
+    log.info(f"materialised {len(rows)} variant rows")
+
+    # Variants partitioned by chrom
+    variants_dir = out_dir / "variants.parquet"
+    variants_dir.mkdir(exist_ok=True)
+    by_chrom = {}
+    for r in rows:
+        by_chrom.setdefault(r["chrom"], []).append(r)
+    for chrom, chrom_rows in sorted(by_chrom.items()):
+        pdir = variants_dir / f"chrom={chrom}"
+        pdir.mkdir(exist_ok=True)
+        rows_no_chrom = [{k: v for k, v in r.items() if k != "chrom"} for r in chrom_rows]
+        table = pa.Table.from_pylist(rows_no_chrom)
+        pq.write_table(table, pdir / "part-0000.parquet", compression="zstd")
+
+    # Gene index
+    gene_index = {}
+    for r in rows:
+        g = r["gene"]["symbol"]
+        if not g:
+            continue
+        d = gene_index.setdefault(g, {
+            "gene_symbol": g, "chrom": r["chrom"],
+            "start_pos": r["pos"], "end_pos": r["pos"],
+            "variant_count": 0, "actionable_count": 0, "pgx_count": 0,
+        })
+        d["start_pos"] = min(d["start_pos"], r["pos"])
+        d["end_pos"] = max(d["end_pos"], r["pos"])
+        d["variant_count"] += 1
+        if r["pathogenicity"]["is_actionable"]:
+            d["actionable_count"] += 1
+        if r["pharmacogenomics"]["is_pgx"]:
+            d["pgx_count"] += 1
+    if gene_index:
+        gi_table = pa.Table.from_pylist(list(gene_index.values()))
+        pq.write_table(gi_table, out_dir / "gene_index.parquet", compression="zstd")
+
+    # Manifest
+    write_manifest(out_dir, rules, sources, acmg_genes)
+
+
+def write_manifest(out_dir: Path, rules: dict, sources: dict, acmg_genes: set):
+    """Compute hashes, write manifest.json."""
+    # Canonical ACMG hash
+    acmg_hash = hashlib.sha256(
+        "\n".join(sorted(acmg_genes)).encode() + b"\n"
+    ).hexdigest()
+    rules_with_hash = json.loads(json.dumps(rules))
+    rules_with_hash["is_actionable"]["gene_list_sha256"] = acmg_hash
+
+    manifest = {
+        "schema_version": "1.1.0",
+        "pipeline_version": "genome-convert-1.1.0",
+        "genome_build": "GRCh38",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "annotation_sources": sources,
+        "consensus_definitions": rules_with_hash,
+        "normalization": "bcftools norm -f GRCh38.fa --atomize",
+        "files": {},
+    }
+
+    for p in sorted(out_dir.iterdir()):
+        if p.name in ("manifest.json", "conversion.log"):
+            continue
+        if p.is_dir():
+            sha = _sha256_dir(p)
+            size = sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+        else:
+            sha = _sha256_file(p)
+            size = p.stat().st_size
+        manifest["files"][p.name] = {"sha256": sha, "rows": None, "bytes": size}
+
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+
+
+def _sha256_file(p: Path) -> str:
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sha256_dir(p: Path) -> str:
+    h = hashlib.sha256()
+    for f in sorted(p.rglob("*")):
+        if f.is_file():
+            h.update(f.relative_to(p).as_posix().encode())
+            h.update(b"\0")
+            with f.open("rb") as fh:
+                while chunk := fh.read(1024 * 1024):
+                    h.update(chunk)
+    return h.hexdigest()
+
+
+def copy_schema(out_dir: Path, schema_path: Optional[Path]):
+    """Copy the binding schema.json into the bundle."""
+    if schema_path:
+        shutil.copy(schema_path, out_dir / "schema.json")
+    else:
+        # Try sibling
+        default = Path(__file__).parent.parent / "schema.json"
+        if default.exists():
+            shutil.copy(default, out_dir / "schema.json")
+        else:
+            log.warning("no schema.json found; bundle will be non-conformant until added")
+
+
+# ---------- Main ----------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Convert an annotated VCF to a .genome/1.1 bundle.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("input_vcf", type=Path, help="annotated, bgzipped VCF")
+    parser.add_argument("--reference", type=Path, required=True, help="GRCh38 reference FASTA")
+    parser.add_argument("--out", type=Path, required=True, help="output bundle directory")
+    parser.add_argument("--schema", type=Path, default=None, help="path to schema.json (default: sibling of script)")
+    parser.add_argument("--no-normalize", action="store_true", help="skip bcftools normalize step (input must already be normalised)")
+    parser.add_argument("--pharmcat", type=Path, default=None, help="path to a PharmCAT JSON output to integrate as pharmacogenomics.parquet")
+    parser.add_argument("--prs-config", type=Path, default=None, help="path to PRS configuration YAML")
+    parser.add_argument("--verbose", action="store_true", help="verbose logging")
+    args = parser.parse_args()
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    setup_logging(args.out, args.verbose)
+
+    log.info(f"genome-convert starting")
+    log.info(f"input: {args.input_vcf}")
+    log.info(f"output: {args.out}")
+
+    # 1. Normalise (or use input directly)
+    if args.no_normalize:
+        norm_vcf = args.input_vcf
+        log.info("skipping normalization per --no-normalize")
+    else:
+        norm_vcf = normalize_vcf(args.input_vcf, args.reference, args.out)
+
+    # 2. Parse CSQ header
+    csq_fields = parse_csq_header(norm_vcf)
+
+    # 3. Stream variants and write bundle
+    rules = DEFAULT_RULES
+    sources = {
+        "vep": "111",  # would read from VCF header in production
+        "clinvar": "<from VCF header>",
+        "gnomad": "<from VCF header>",
+        "cadd": "<from VCF header>",
+        "revel": "<from VCF header>",
+        "alphamissense": "<from VCF header>",
+        "spliceai": "<from VCF header>",
+        "acmg_sf_list": "v3.2",
+        "cpic_guidelines": "<from manifest input>",
+    }
+
+    rows = stream_variants(norm_vcf, csq_fields, rules, ACMG_SF_V3_2)
+    write_bundle(rows, args.out, rules, sources, ACMG_SF_V3_2)
+
+    # 4. Schema
+    copy_schema(args.out, args.schema)
+
+    # 5. Cleanup intermediate files
+    if not args.no_normalize:
+        try:
+            (args.out / "_normalized.vcf.gz").unlink(missing_ok=True)
+            (args.out / "_normalized.vcf.gz.tbi").unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    log.info(f"bundle written: {args.out}")
+    log.info("done")
+
+
+if __name__ == "__main__":
+    main()

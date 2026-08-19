@@ -1,0 +1,36 @@
+--- a/LoF.pm
++++ b/LoF.pm
+@@ -38,12 +38,14 @@
+ no if $] >= 5.018, 'warnings', "experimental::smartmatch";
+ 
+ our $debug;
++my %ANCESTOR_FAIDX;
+ 
+ use Bio::EnsEMBL::Variation::Utils::BaseVepPlugin;
+ use DBI;
+ 
+ use base qw(Bio::EnsEMBL::Variation::Utils::BaseVepPlugin);
+ use Bio::Perl;
++use Bio::DB::HTS::Faidx;
+ use List::Util qw(sum);
+ 
+ sub get_header_info {
+@@ -536,10 +538,14 @@
+     
+     # Get ancestral allele from human_ancestor.fa.rz
+     my $region = $variation_feature->seq_region_name() . ":" . $variation_feature->seq_region_start() . '-' . $variation_feature->seq_region_end();
+-    my $faidx = `samtools faidx $human_ancestor_location $region`;
+-    my @lines = split(/\n/, $faidx);
+-    shift @lines;
+-    my $ancestral_allele = uc(join('', @lines));
++    my $faidx = $ANCESTOR_FAIDX{$human_ancestor_location};
++    if (!defined($faidx)) {
++        $faidx = Bio::DB::HTS::Faidx->new($human_ancestor_location);
++        $ANCESTOR_FAIDX{$human_ancestor_location} = $faidx;
++    }
++    my ($ancestral_allele) = $faidx->get_sequence($region);
++    return 0 if !defined($ancestral_allele);
++    $ancestral_allele = uc($ancestral_allele);
+     
+     return ($ancestral_allele eq $aff_allele)
+ }

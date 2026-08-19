@@ -1,0 +1,163 @@
+{
+  "artifact": {
+    "components": {
+      "details_result": "results/SUBJECT/hla.result.details.txt",
+      "full_result": "results/SUBJECT/hla.result.txt",
+      "g_group_result": "results/SUBJECT/hla.result.g.group.txt"
+    },
+    "derived_payload": null,
+    "identity_scheme": "named_sha256_set",
+    "raw_artifact_id": "spechla-result-set"
+  },
+  "caller_name": "SpecHLA",
+  "caller_version": "1.0.12",
+  "command_semantics": {
+    "environment": {
+      "HOME": "{working_directory}/home",
+      "LC_ALL": "C",
+      "TMPDIR": "{working_directory}/tmp"
+    },
+    "parameters": {
+      "alignment_contract": "coordinate-sorted indexed BAM",
+      "caller_visible_sample_alias": "SUBJECT",
+      "image_environment_bootstrap": "env-execute",
+      "population_prior": "Unknown",
+      "reference_label": "hg38",
+      "temporary_outputs_removed": true,
+      "threads": 8,
+      "typing_mode": "full-length short-read HLA"
+    },
+    "steps": [
+      {
+        "arguments": [
+          "-p",
+          "{working_directory}/home",
+          "{working_directory}/tmp",
+          "{working_directory}/extracted",
+          "{working_directory}/results"
+        ],
+        "entrypoint": "mkdir",
+        "name": "prepare_workspace"
+      },
+      {
+        "arguments": [
+          "-c",
+          "set -euo pipefail; exec \"$(dirname \"$(command -v spechla)\")/../env-execute\" \"$@\"",
+          "spechla-bootstrap",
+          "spechla-extract-hla-reads",
+          "-s",
+          "SUBJECT",
+          "-b",
+          "{selected_alignment}",
+          "-r",
+          "hg38",
+          "-o",
+          "{working_directory}/extracted",
+          "-T",
+          "{reference_fasta}"
+        ],
+        "entrypoint": "bash",
+        "name": "extract_hla_reads"
+      },
+      {
+        "arguments": [
+          "-c",
+          "set -euo pipefail; exec \"$(dirname \"$(command -v spechla)\")/../env-execute\" \"$@\"",
+          "spechla-bootstrap",
+          "spechla",
+          "-n",
+          "SUBJECT",
+          "-1",
+          "{working_directory}/extracted/SUBJECT_extract_1.fq.gz",
+          "-2",
+          "{working_directory}/extracted/SUBJECT_extract_2.fq.gz",
+          "-o",
+          "{working_directory}/results",
+          "-i",
+          "{spechla_database}",
+          "-j",
+          "8",
+          "-p",
+          "Unknown",
+          "-u",
+          "0",
+          "-l",
+          "1"
+        ],
+        "entrypoint": "bash",
+        "name": "call"
+      }
+    ]
+  },
+  "gate_caller": "spechla",
+  "image": "quay.io/biocontainers/spechla@sha256:c6b76272e17f4f3f91efebe96bdbad52dd8a965dae64a50d33edf432f1a96144",
+  "licence": "MIT for SpecHLA 1.0.12; IPD-IMGT/HLA database acquired and licensed separately",
+  "limits": {
+    "cpus": 8.0,
+    "memory_bytes": 68719476736,
+    "pids": 4096,
+    "shm_bytes": 2147483648
+  },
+  "mounts": [
+    {
+      "container_path": "/inputs/alignment.bam",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment"
+    },
+    {
+      "container_path": "/inputs/alignment.bam.bai",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment_index"
+    },
+  {
+    "container_path": "/inputs/reference.fa",
+    "expected_sha256": "1e74081a49ceb9739cc14c812fbb8b3db978eb80ba8e5350beb80d8ad8dfef3b",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fasta"
+    },
+  {
+    "container_path": "/inputs/reference.fa.fai",
+    "expected_sha256": "0998f61682f4041b11f0d156e1db6dae3e4c743e26643a3f45ea7faea70cb604",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fai"
+    },
+    {
+      "container_path": "/provenance/resources.json",
+      "kind": "file",
+      "mode": "ro",
+      "role": "resource_manifest"
+    },
+  {
+    "container_path": "/database",
+    "expected_tree_manifest_sha256": "f7f593c543d38ca4e668bff0004c05f2594b00e0b03751dc472b0601a4bce64c",
+      "kind": "directory",
+      "mode": "ro",
+      "role": "spechla_database"
+    },
+    {
+      "container_path": "/work",
+      "kind": "directory",
+      "mode": "rw",
+      "role": "workspace"
+    }
+  ],
+  "placeholder_bindings": {
+    "{reference_fasta}": "/inputs/reference.fa",
+    "{selected_alignment}": "/inputs/alignment.bam",
+    "{spechla_database}": "/database",
+    "{working_directory}": "/work"
+  },
+  "profile_id": "spechla-short-read-bam-1.0.12",
+  "schema_version": 1,
+  "tmpfs": [
+    {
+      "bytes": 8589934592,
+      "container_path": "/tmp",
+      "executable": false
+    }
+  ]
+}

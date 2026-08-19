@@ -1,0 +1,129 @@
+{
+  "artifact": {
+    "components": {
+      "primary_bcf": "delly/SUBJECT.sr.bcf"
+    },
+    "derived_payload": null,
+    "identity_scheme": "file_sha256",
+    "raw_artifact_id": "delly-single-sample-sr-bcf"
+  },
+  "caller_name": "DELLY",
+  "caller_version": "2.5.1",
+  "command_semantics": {
+    "environment": {
+      "LC_ALL": "C",
+      "TMPDIR": "{working_directory}/tmp"
+    },
+    "parameters": {
+      "binary_sha256": "98bab8261663f6bead10ebf9c864e22b71f087244350f098c7d631625e65e648",
+      "exclude_track_policy": "exact-reference projected DELLY exclusion track",
+      "mode": "short-read discovery",
+      "threads": 8
+    },
+    "steps": [
+      {
+        "arguments": [
+          "-p",
+          "{working_directory}/delly",
+          "{working_directory}/tmp"
+        ],
+        "entrypoint": "mkdir",
+        "name": "prepare_workspace"
+      },
+      {
+        "arguments": [
+          "sr",
+          "--threads",
+          "8",
+          "--genome",
+          "{reference_fasta}",
+          "--exclude",
+          "{delly_exclude}",
+          "--outfile",
+          "{working_directory}/delly/SUBJECT.sr.bcf",
+          "{selected_alignment}"
+        ],
+        "entrypoint": "delly",
+        "name": "discover"
+      }
+    ]
+  },
+  "gate_caller": "delly",
+  "image": "ubuntu@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea",
+  "licence": "BSD-3-Clause for DELLY 2.5.1; Ubuntu runtime retains its upstream terms",
+  "limits": {
+    "cpus": 8.0,
+    "memory_bytes": 68719476736,
+    "pids": 4096,
+    "shm_bytes": 2147483648
+  },
+  "mounts": [
+    {
+      "container_path": "/usr/local/bin/delly",
+      "expected_sha256": "98bab8261663f6bead10ebf9c864e22b71f087244350f098c7d631625e65e648",
+      "kind": "file",
+      "mode": "ro",
+      "role": "delly_binary"
+    },
+    {
+      "container_path": "/resources/human.GRCh38.excl.tsv",
+      "expected_sha256": "fff1fe61fff099bb09e1fc8969b3a6b59be38de5d37688a7395fabd01922bfe3",
+      "kind": "file",
+      "mode": "ro",
+      "role": "delly_exclude"
+    },
+  {
+    "container_path": "/inputs/reference.fa",
+    "expected_sha256": "1e74081a49ceb9739cc14c812fbb8b3db978eb80ba8e5350beb80d8ad8dfef3b",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fasta"
+    },
+  {
+    "container_path": "/inputs/reference.fa.fai",
+    "expected_sha256": "0998f61682f4041b11f0d156e1db6dae3e4c743e26643a3f45ea7faea70cb604",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fai"
+    },
+    {
+      "container_path": "/provenance/resources.json",
+      "kind": "file",
+      "mode": "ro",
+      "role": "resource_manifest"
+    },
+    {
+      "container_path": "/inputs/alignment.bam",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment"
+    },
+    {
+      "container_path": "/inputs/alignment.bam.bai",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment_index"
+    },
+    {
+      "container_path": "/work",
+      "kind": "directory",
+      "mode": "rw",
+      "role": "workspace"
+    }
+  ],
+  "placeholder_bindings": {
+    "{delly_exclude}": "/resources/human.GRCh38.excl.tsv",
+    "{reference_fasta}": "/inputs/reference.fa",
+    "{selected_alignment}": "/inputs/alignment.bam",
+    "{working_directory}": "/work"
+  },
+  "profile_id": "delly-short-read-2.5.1",
+  "schema_version": 1,
+  "tmpfs": [
+    {
+      "bytes": 8589934592,
+      "container_path": "/tmp",
+      "executable": false
+    }
+  ]
+}

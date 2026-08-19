@@ -1,0 +1,23 @@
+{
+  "profiles": {
+    "hla-la-short-read-1.0.4": {
+      "caller_database_identity_sha256": "REPLACE_WITH_EXACT_64_HEX_DIGEST",
+      "caller_database_name": "REPLACE_WITH_DATABASE_NAME",
+      "caller_database_version": "REPLACE_WITH_DATABASE_VERSION",
+      "database_age_limitation": true,
+      "nomenclature_identity_sha256": "REPLACE_WITH_EXACT_64_HEX_DIGEST",
+      "nomenclature_database_name": "REPLACE_WITH_NOMENCLATURE_NAME",
+      "nomenclature_version": "REPLACE_WITH_NOMENCLATURE_VERSION"
+    },
+    "spechla-short-read-bam-1.0.12": {
+      "caller_database_identity_sha256": "REPLACE_WITH_EXACT_64_HEX_DIGEST",
+      "caller_database_name": "REPLACE_WITH_DATABASE_NAME",
+      "caller_database_version": "REPLACE_WITH_DATABASE_VERSION",
+      "database_age_limitation": false,
+      "nomenclature_identity_sha256": "REPLACE_WITH_EXACT_64_HEX_DIGEST",
+      "nomenclature_database_name": "REPLACE_WITH_NOMENCLATURE_NAME",
+      "nomenclature_version": "REPLACE_WITH_NOMENCLATURE_VERSION"
+    }
+  },
+  "schema_version": 1
+}

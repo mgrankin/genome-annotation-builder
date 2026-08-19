@@ -1,0 +1,217 @@
+project:
+  output_dir: /path/to/private/output
+  work_dir: /path/to/private/work
+  bundle_name: sample.genome
+
+input:
+  vcf: /path/to/private/sample.reference-confidence.vcf.gz
+  sample: SAMPLE_ID
+  genome_build: GRCh38
+
+reference:
+  fasta: /path/to/reference/GRCh38.fa
+  expected_sha256: null
+  contig_style: chr
+
+resources:
+  cache_dir: /path/to/private/resources
+  allow_download: true
+  genome_spec_commit: 7354ae288784234f854562b7dceb87f067fad550
+
+normalization:
+  bcftools: bcftools
+  check_ref: error
+
+quality:
+  callable_min_dp: 10
+  callable_min_gq: 20
+  medium_min_dp: 10
+  medium_min_gq: 20
+  high_min_dp: 20
+  high_min_gq: 30
+
+annotation:
+  # Annotation adapters are optional. Enabling one requires its pinned resource
+  # manifest to pass preflight; disabled domains remain explicit omissions.
+  vep:
+    enabled: false
+    mode: docker
+    executable: vep
+    # linux/amd64 digest; use the matching immutable digest on another architecture.
+    container_image: ensemblorg/ensembl-vep@sha256:f354dd8d09073e4d943acbbd02f5eb234a9d9e9d444371c1c349910f2123de11
+    # Directory containing the VEP 116 built-in plugins inside the pinned
+    # container. Predictor adapters in this release require exactly /plugins.
+    plugin_dir: /plugins
+    cache_dir: /path/to/private/resources/vep/116/cache
+    cache_version: "116"
+    cache_manifest: /path/to/private/resources/vep/116/cache_resource_manifest.json
+    expected_version: "116.0"
+    forks: 8
+    buffer_size: 5000
+  # Optional offline VEP plugins. Resources are never vendored or embedded in
+  # the public repository. `predictors-sync` downloads exact pinned releases,
+  # prepares their local indexes, and writes a private relative-path manifest.
+  # This release conservatively forbids asserting resource redistribution;
+  # generated bundles retain only per-variant annotations plus provenance.
+  predictors:
+    root: /path/to/private/resources/predictors
+    manifest: /path/to/private/resources/predictors/predictor_resource_manifest.json
+    loftee:
+      enabled: false
+      license: "MIT (source); ancillary GRCh38 resource redistribution terms not stated"
+      redistribution_allowed: false
+    cadd:
+      enabled: false
+      license: "CADD v1.7 terms; non-commercial use unless separately licensed"
+      redistribution_allowed: false
+    revel:
+      enabled: false
+      license: "REVEL upstream terms; academic/non-commercial use, redistribution not granted"
+      redistribution_allowed: false
+    alphamissense:
+      enabled: false
+      # The exact hosted file embeds a stricter notice than the repository.
+      license: "CC BY-NC-SA 4.0 notice embedded in exact file; upstream repository states CC BY 4.0"
+      redistribution_allowed: false
+    spliceai:
+      enabled: false
+      # The pinned Ensembl set covers MANE v1.4 SNVs only; indels remain an
+      # explicit omission unless the user independently supplies a licensed,
+      # checksum-pinned official source in a future adapter version.
+      license: "Ensembl terms plus upstream SpliceAI terms; redistribution review required"
+      redistribution_allowed: false
+  clinvar:
+    enabled: false
+    snapshot: "20260808"
+    vcf: /path/to/private/resources/clinvar/20260808/normalized/clinvar.GRCh38.vcf.gz
+    manifest: /path/to/private/resources/clinvar/20260808/resource_manifest.json
+  # ACMG SF interpretation requires both VEP and ClinVar above. Gene membership
+  # alone is never treated as an actionable finding.
+  acmg_sf:
+    enabled: false
+    version: "3.3"
+    snapshot: "20260815"
+    dataset: /path/to/private/resources/acmg_sf/3.3/acmg_sf_v3.3_20260815.json
+    manifest: /path/to/private/resources/acmg_sf/3.3/resource_manifest.json
+    min_clinvar_review_stars: 2
+  # Expert-curated ClinGen gene-disease validity and GRCh38 dosage sensitivity.
+  # The release includes a deterministic CC0 canonical snapshot; `clingen-sync`
+  # materializes typed local Parquet indexes. These are gene-level context only:
+  # a variant in a curated gene is not thereby pathogenic and is not a diagnosis.
+  clingen:
+    enabled: false
+    snapshot: "2026-08-15"
+    root: /path/to/private/resources/clingen/2026-08-15
+    gene_disease_parquet: /path/to/private/resources/clingen/2026-08-15/normalized/gene_disease_validity.parquet
+    dosage_parquet: /path/to/private/resources/clingen/2026-08-15/normalized/dosage_sensitivity.parquet
+    manifest: /path/to/private/resources/clingen/2026-08-15/resource_manifest.json
+    license: CC0-1.0
+    redistribution_allowed: true
+  # Literature-curated, population-level associations from one immutable
+  # NHGRI-EBI GWAS Catalog release. The source ZIP is never embedded. Exact
+  # coordinate + rsID + effect-allele matching is required; ambiguous legacy
+  # OR-or-BETA rows remain visible only in the lossless audit extension.
+  gwas:
+    enabled: false
+    snapshot: "2026-08-03"
+    archive: /path/to/private/resources/gwas_catalog/2026-08-03/archive/gwas-catalog-associations_ontology-annotated-full.zip
+    archive_expected_sha256: 3ed9a1335926181d36334fe66fbf6754faf5120c780bc385241c5ad3fafcfe47
+    normalized_parquet: /path/to/private/resources/gwas_catalog/2026-08-03/normalized/gwas_catalog.parquet
+    manifest: /path/to/private/resources/gwas_catalog/2026-08-03/resource_manifest.json
+    license: EMBL-EBI Terms of Use
+    redistribution_allowed: false
+  # Optional PGS Catalog models. The builder accepts only additive, biallelic
+  # GRCh38-harmonized rows and records every excluded or unresolved locus.
+  # A normative prs.parquet row is emitted only when a digest-bound empirical
+  # calibration table is present and the declared missing-weight gate passes.
+  pgs:
+    enabled: false
+    models: []
+    # Example model entry:
+    # - pgs_id: PGS000001
+    #   scoring_file: /path/to/private/PGS000001_hmPOS_GRCh38.txt.gz
+    #   expected_sha256: null  # replace with exactly 64 lowercase hex characters
+    #   source_version: "2026-08-15"
+    #   training_date: "2015-02-18"
+    #   trait: Breast cancer
+    #   model_type: linear
+    #   license: "resource-specific licence text or identifier"
+    #   redistribution_allowed: false
+    #   max_missing_weight_fraction: 0.0
+    #   calibration:
+    #     file: /path/to/private/PGS000001.calibration.tsv
+    #     expected_sha256: null  # replace with exactly 64 lowercase hex characters
+  # Optional conservative small-variant PGx path. PharmCAT is run from the exact
+  # image digest with networking disabled. Its positions are joined to explicit
+  # target evidence; missing, interval-only, other-ALT, and low-confidence loci
+  # remain no-calls. CYP2D6/HLA/MT-RNR1 require a separate validated outside call.
+  pgx:
+    enabled: false
+    pharmcat:
+      version: "3.4.0"
+      release_commit: 41f21b71886b961b24a00344ef2dad2387aaa0c9
+      positions_vcf: /path/to/private/resources/pharmcat/3.4.0/pharmcat_positions_3.4.0.vcf.bgz
+      expected_sha256: 01a28fe31675c9e8a8b18bcab4afb82a62abdfea6606856aeca0e0378e7d6b58
+      container_image: pgkb/pharmcat@sha256:bc498d55c33094002bd7e14221a6b3fcd7243a587675369bc1a5ecf6ac0e5319
+      license: MPL-2.0
+      redistribution_allowed: false
+    cpic:
+      pairs_json: /path/to/private/resources/cpic/cpic_pairs.json
+      expected_sha256: null  # freeze with scripts/freeze_cpic_pairs.py, then replace
+      # Exact official CPIC data release. The freezer separately records the
+      # release tag/commit and the actually served PostgREST/OpenAPI identity.
+      source_version: "replace-with-exact-CPIC-data-release"
+      snapshot_date: "1970-01-01"  # replace with the actual freeze date
+      license: "replace-with-reviewed-resource-terms"
+      redistribution_allowed: false
+    docker_executable: docker
+    timeout_seconds: 1800
+
+  # Optional subject-only projection from a normalized family joint VCF. The
+  # portable bundle never retains relative identifiers or relative genotypes.
+  # Every source is immutable; LOCO is an optional all-or-none exception ledger.
+  family_evidence:
+    enabled: false
+    joint_vcf: /path/to/private/family.joint.normalized.vcf.gz
+    joint_vcf_expected_sha256: null
+    pedigree: /path/to/private/family.ped
+    pedigree_expected_sha256: null
+    source_version: "replace-with-versioned-family-callset"
+    snapshot_date: "1970-01-01"
+    tags:
+      confidence_format: null
+      reasons_format: null
+      caller_concordance_format: null
+      technical_replicate_concordance_format: null
+      de_novo_score_format: null
+      phase_set_format: PS
+      difficult_info_flags: []
+      de_novo_confidence_values: []
+      conflict_confidence_values: []
+      parental_mosaicism_reason_tokens: []
+      parental_dropout_reason_tokens: []
+      child_dropout_reason_tokens: []
+    # loco:
+    #   review_tsv: /path/to/private/heldout/review.tsv
+    #   review_expected_sha256: null
+    #   summary_json: /path/to/private/heldout/summary.json
+    #   summary_expected_sha256: null
+
+# Optional frozen union of actually queried ClinVar/ACMG/PGx/PGS/GWAS loci.
+# The TSV format and negative-answer semantics are documented in the README.
+callability:
+  target_catalog:
+    enabled: false
+    path: /path/to/private/resources/targets/targets.tsv
+    expected_sha256: null
+    assay_scope: small_variant_reference_confidence_vcf
+
+output:
+  agent_exploration_profile: true
+  reference_confidence_extension: true
+  partition_variants_by_chromosome: true
+  overwrite: false
+
+privacy:
+  include_input_paths: false
+  include_sample_identifier: false

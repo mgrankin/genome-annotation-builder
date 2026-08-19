@@ -1,0 +1,13 @@
+target_id	chrom	pos	ref	alt	gene_symbol	target_source	target_source_version	evidence_scope
+rs100001	1	10	C	T	GENE1	Synthetic Catalogue	1.0	site
+different_alt	1	10	C	G	GENE1	Synthetic Catalogue	1.0	site
+site_multiallelic	1	11			GENE1	Synthetic Catalogue	1.0	target_panel
+explicit_reference	1	12	T	G	GENE1	Synthetic Catalogue	1.0	site
+no_call	1	13	A	G	GENE1	Synthetic Catalogue	1.0	site
+low_reference	1	16	T	C	GENE2	Synthetic Catalogue	1.0	site
+symbolic_overlap	1	21	A	G	GENE2	Synthetic Catalogue	1.0	site
+filtered_variant	1	22	C	G	GENE2	Synthetic Catalogue	1.0	site
+insertion	1	23	G	GA	GENE2	Synthetic Catalogue	1.0	site
+haploid_variant	1	30	C	A	GENE3	Synthetic Catalogue	1.0	site
+explicit_reference_block	1	2	C	G	GENE1	Synthetic Catalogue	1.0	site
+unknown	1	100	T	C	GENE4	Synthetic Catalogue	1.0	site

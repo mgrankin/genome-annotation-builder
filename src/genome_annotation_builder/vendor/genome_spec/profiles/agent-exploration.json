@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genome.computer/spec/profiles/agent-exploration/1.0.0.json",
+  "title": ".genome Agent Exploration Profile",
+  "version": "1.0.0",
+  "compatible_core": ">=1.1.0 <2.0.0",
+  "required_paths": [
+    "manifest.json",
+    "schema.json",
+    "field_glossary.json",
+    "inventory.json",
+    "raw_artifacts.json",
+    "transformations.json",
+    "omissions.json",
+    "relationships.json",
+    "readmygenome.md",
+    "readmygenome/SKILL.md",
+    "readmygenome/scripts/query.py",
+    "readmygenome/reference/query_catalog.md",
+    "readmygenome/reference/synonyms.json",
+    "readmygenome/evals/canonical_questions.json"
+  ],
+  "required_cli_operations": [
+    "overview",
+    "search",
+    "variant",
+    "gene",
+    "clinical",
+    "pgx",
+    "prs",
+    "callability",
+    "evidence"
+  ],
+  "required_operating_rules": [
+    "validate_before_query",
+    "bounded_iterative_queries",
+    "read_only_sql",
+    "search_relevant_tables",
+    "check_callability_before_absence",
+    "preserve_evidence_classes",
+    "continue_after_empty_retrieval",
+    "cite_rows_sources_and_dates",
+    "preserve_confirmation_and_medical_boundaries"
+  ],
+  "minimum_evaluation_cases": 30
+}

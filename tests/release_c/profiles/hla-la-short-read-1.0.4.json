@@ -1,0 +1,115 @@
+{
+  "artifact": {
+    "components": {
+      "bestguess_g_group": "SUBJECT/hla/R1_bestguess_G.txt"
+    },
+    "derived_payload": null,
+    "identity_scheme": "file_sha256",
+    "raw_artifact_id": "hlala-bestguess-g-group"
+  },
+  "caller_name": "HLA*LA",
+  "caller_version": "1.0.4",
+  "command_semantics": {
+    "environment": {
+      "HOME": "{working_directory}/home",
+      "LC_ALL": "C",
+      "TMPDIR": "{working_directory}/tmp"
+    },
+    "parameters": {
+      "caller_visible_sample_alias": "SUBJECT",
+      "graph_name": "PRG_MHC_GRCh38_withIMGT",
+      "max_threads": 7,
+      "workflow": "short-read HLA typing"
+    },
+    "steps": [
+      {
+        "arguments": [
+          "-p",
+          "{working_directory}/home",
+          "{working_directory}/tmp"
+        ],
+        "entrypoint": "mkdir",
+        "name": "prepare_workspace"
+      },
+      {
+        "arguments": [
+          "--BAM",
+          "{selected_alignment}",
+          "--graph",
+          "PRG_MHC_GRCh38_withIMGT",
+          "--customGraphDir",
+          "{hla_graph}",
+          "--sampleID",
+          "SUBJECT",
+          "--workingDir",
+          "{working_directory}",
+          "--maxThreads",
+          "7"
+        ],
+        "entrypoint": "HLA-LA.pl",
+        "name": "call"
+      }
+    ]
+  },
+  "gate_caller": "hla_la",
+  "image": "quay.io/biocontainers/hla-la@sha256:467fa7aa0f61f9ecde23b1e6ebe25705a7093243c5bfa86a9abab9ae6d7041fe",
+  "licence": "GPL-3.0 for HLA*LA software; graph data acquired and licensed separately",
+  "limits": {
+    "cpus": 8.0,
+    "memory_bytes": 68719476736,
+    "pids": 4096,
+    "shm_bytes": 2147483648
+  },
+  "mounts": [
+    {
+      "container_path": "/graphs",
+      "kind": "directory",
+      "mode": "ro",
+      "role": "hla_graph"
+    },
+    {
+      "container_path": "/inputs/alignment.bam",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment"
+    },
+    {
+      "container_path": "/inputs/alignment.bam.bai",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment_index"
+    },
+    {
+      "container_path": "/inputs/reference.fa",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fasta"
+    },
+    {
+      "container_path": "/provenance/resources.json",
+      "kind": "file",
+      "mode": "ro",
+      "role": "resource_manifest"
+    },
+    {
+      "container_path": "/work",
+      "kind": "directory",
+      "mode": "rw",
+      "role": "workspace"
+    }
+  ],
+  "placeholder_bindings": {
+    "{hla_graph}": "/graphs",
+    "{selected_alignment}": "/inputs/alignment.bam",
+    "{working_directory}": "/work"
+  },
+  "profile_id": "hla-la-short-read-1.0.4",
+  "schema_version": 1,
+  "tmpfs": [
+    {
+      "bytes": 8589934592,
+      "container_path": "/tmp",
+      "executable": false
+    }
+  ]
+}

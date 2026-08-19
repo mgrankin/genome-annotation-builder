@@ -1,0 +1,33 @@
+{
+  "production_dataset_execution_claimed": false,
+  "resources": {
+    "example_grch38_resource_set": {
+      "identity_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "status": "PASS"
+    }
+  },
+  "runtime_resource_trees": {
+    "example_resource_tree": {
+      "tree_identity_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "tree_manifest_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  },
+  "schema_version": 1,
+  "scope": "checksum-bound tool and resource readiness; production dataset execution is not claimed",
+  "status": "PASS_WITH_DOCUMENTED_LIMITATIONS",
+  "tools": {
+    "example_tool": {
+      "identity_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "version": "REPLACE_WITH_VALIDATED_VERSION"
+    }
+  },
+  "validation_evidence": {
+    "example_control": {
+      "receipt_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "status": "PASS"
+    }
+  },
+  "warnings": [
+    "replace this example limitation with every deployment-specific limitation"
+  ]
+}

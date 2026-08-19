@@ -1,0 +1,23 @@
+##fileformat=VCFv4.2
+##contig=<ID=1,length=200>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FILTER=<ID=q10,Description="Synthetic low quality">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End position">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=MIN_DP,Number=1,Type=Integer,Description="Minimum block depth">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allele depth">
+##FORMAT=<ID=FT,Number=1,Type=String,Description="Genotype filter">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE_ID
+1	1	.	A	<*>	.	PASS	END=9	GT:DP:MIN_DP:GQ:AD:FT	0/0:31:27:60:31,0:PASS
+1	10	rs100001	C	T,<*>	60	PASS	.	GT:DP:GQ:AD:FT	0/1:30:55:15,15,0:PASS
+1	11	rs100002	G	A,T,<*>	70	PASS	.	GT:DP:GQ:AD:FT	1/2:25:50:9,8,8,0:PASS
+1	12	.	T	C,<*>	50	PASS	.	GT:DP:GQ:AD:FT	0/0:29:48:29,0,0:PASS
+1	13	.	A	<*>	.	PASS	END=15	GT:DP:MIN_DP:GQ:AD:FT	./.:0:0:0:0,0:PASS
+1	16	.	T	<*>	.	PASS	END=20	GT:DP:MIN_DP:GQ:AD:FT	0/0:8:6:45:8,0:PASS
+1	21	.	A	<DEL>	20	PASS	END=21	GT:DP:GQ:AD:FT	0/1:22:35:11,11:PASS
+1	22	.	C	G	10	q10	.	GT:DP:GQ:AD:FT	1/1:24:50:0,24:q10
+1	23	.	G	GA	50	PASS	.	GT:DP:GQ:AD:FT	0/1:26:45:13,13:PASS
+1	24	.	TA	T	50	PASS	.	GT:DP:GQ:AD:FT	0/1:28:47:14,14:PASS
+1	30	.	C	A	50	PASS	.	GT:DP:GQ:AD:FT	1:18:42:0,18:PASS

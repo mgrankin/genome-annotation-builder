@@ -1,0 +1,543 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genome.computer/spec/genome/1.1.0/schema.json",
+  "title": ".genome bundle schema",
+  "version": "1.1.0",
+  "description": "Binding schema for a .genome/1.1 bundle. This file is shipped inside the bundle as schema.json and should be treated as the contract for any reader.",
+
+  "$defs": {
+    "EvidenceClass": {
+      "enum": [
+        "observed", "pipeline_derived", "external_annotation",
+        "reviewed_interpretation", "bundle_metadata"
+      ]
+    },
+    "QualityStruct": {
+      "type": "object",
+      "required": ["call_confidence", "origin"],
+      "properties": {
+        "call_confidence": {"enum": ["high", "medium", "low"]},
+        "origin": {"enum": ["observed", "imputed"]},
+        "imputation_r2": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "imputation_panel": {"type": ["string", "null"]},
+        "dp": {"type": ["integer", "null"]},
+        "gq": {"type": ["integer", "null"]}
+      }
+    },
+    "GenotypeStruct": {
+      "type": "object",
+      "required": ["gt", "phased", "zygosity"],
+      "properties": {
+        "gt": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 2},
+        "phased": {"type": "boolean"},
+        "zygosity": {"enum": ["hom_ref", "het", "hom_alt"]},
+        "allele_balance": {"type": ["number", "null"]}
+      }
+    },
+    "GeneStruct": {
+      "type": "object",
+      "properties": {
+        "symbol": {"type": ["string", "null"]},
+        "ensembl_id": {"type": ["string", "null"]},
+        "hgnc_id": {"type": ["string", "null"]},
+        "biotype": {"type": ["string", "null"]},
+        "is_canonical": {"type": ["boolean", "null"]}
+      }
+    },
+    "ConsequenceStruct": {
+      "type": "object",
+      "properties": {
+        "most_severe": {"type": ["string", "null"]},
+        "impact": {"enum": ["HIGH", "MODERATE", "LOW", "MODIFIER", null]},
+        "hgvsc": {"type": ["string", "null"]},
+        "hgvsp": {"type": ["string", "null"]},
+        "all_annotations": {"type": ["array", "null"]}
+      }
+    },
+    "PopulationFrequencyStruct": {
+      "type": "object",
+      "required": ["is_rare"],
+      "properties": {
+        "gnomad_af": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "gnomad_af_popmax": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "gnomad_af_nfe": {"type": ["number", "null"]},
+        "gnomad_af_eas": {"type": ["number", "null"]},
+        "gnomad_af_afr": {"type": ["number", "null"]},
+        "gnomad_af_sas": {"type": ["number", "null"]},
+        "gnomad_af_amr": {"type": ["number", "null"]},
+        "is_rare": {"type": "boolean"}
+      }
+    },
+    "PathogenicityStruct": {
+      "type": "object",
+      "required": ["is_actionable", "clinvar_has_conflicts"],
+      "properties": {
+        "clinvar_significance": {
+          "enum": [
+            "Pathogenic", "Likely_pathogenic", "Uncertain_significance",
+            "Likely_benign", "Benign", "Conflicting_interpretations", null
+          ]
+        },
+        "clinvar_has_conflicts": {"type": "boolean"},
+        "clinvar_conflict_summary": {"type": ["string", "null"]},
+        "clinvar_review_stars": {"type": ["integer", "null"], "minimum": 0, "maximum": 4},
+        "clinvar_submitters_count": {"type": ["integer", "null"]},
+        "clinvar_id": {"type": ["string", "null"]},
+        "is_actionable": {"type": "boolean"}
+      }
+    },
+    "PredictionsStruct": {
+      "type": "object",
+      "required": ["consensus_damaging"],
+      "properties": {
+        "cadd_phred": {"type": ["number", "null"]},
+        "revel": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "alphamissense": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "spliceai_max": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "polyphen": {"type": ["number", "null"]},
+        "sift": {"type": ["number", "null"]},
+        "consensus_damaging": {"type": "boolean"}
+      }
+    },
+    "PharmacogenomicsVariantStruct": {
+      "type": "object",
+      "required": ["is_pgx"],
+      "properties": {
+        "is_pgx": {"type": "boolean"},
+        "contributes_to_gene": {"type": ["string", "null"]}
+      }
+    },
+    "TraitAssociationsStruct": {
+      "type": "object",
+      "required": ["is_gwas_hit"],
+      "properties": {
+        "is_gwas_hit": {"type": "boolean"},
+        "traits": {"type": ["array", "null"], "items": {"type": "string"}},
+        "effect_size": {"type": ["number", "null"]},
+        "effect_type": {"enum": ["beta", "odds_ratio", "hazard_ratio", null]},
+        "effect_allele": {"type": ["string", "null"]},
+        "ci_lower": {"type": ["number", "null"]},
+        "ci_upper": {"type": ["number", "null"]},
+        "p_value": {"type": ["number", "null"]},
+        "sample_size": {"type": ["integer", "null"]},
+        "study_pmids": {"type": ["array", "null"], "items": {"type": "string"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"effect_size": {"type": "number"}}, "required": ["effect_size"]},
+          "then": {"required": ["effect_size", "effect_type", "effect_allele"]}
+        }
+      ]
+    },
+
+    "VariantRow": {
+      "type": "object",
+      "required": [
+        "variant_id", "chrom", "pos", "ref", "alt", "variant_type",
+        "quality", "genotype", "gene", "consequence", "population_frequency",
+        "pathogenicity", "predictions", "pharmacogenomics", "trait_associations",
+        "clinical_grade"
+      ],
+      "properties": {
+        "variant_id": {"type": "string", "pattern": "^chr[\\dXYM]+:\\d+:[ACGT]+:[ACGT]+$"},
+        "chrom": {"type": "string"},
+        "pos": {"type": "integer", "minimum": 1},
+        "ref": {"type": "string", "pattern": "^[ACGT]+$"},
+        "alt": {"type": "string", "pattern": "^[ACGT]+$"},
+        "variant_type": {"enum": ["SNV", "INS", "DEL", "MNV", "SV"]},
+        "rsid": {"type": ["string", "null"]},
+        "quality": {"$ref": "#/$defs/QualityStruct"},
+        "genotype": {"$ref": "#/$defs/GenotypeStruct"},
+        "gene": {"$ref": "#/$defs/GeneStruct"},
+        "consequence": {"$ref": "#/$defs/ConsequenceStruct"},
+        "population_frequency": {"$ref": "#/$defs/PopulationFrequencyStruct"},
+        "pathogenicity": {"$ref": "#/$defs/PathogenicityStruct"},
+        "predictions": {"$ref": "#/$defs/PredictionsStruct"},
+        "pharmacogenomics": {"$ref": "#/$defs/PharmacogenomicsVariantStruct"},
+        "trait_associations": {"$ref": "#/$defs/TraitAssociationsStruct"},
+        "clinical_grade": {"type": "boolean"}
+      }
+    },
+
+    "PharmacogenomicsRow": {
+      "type": "object",
+      "required": ["gene_symbol", "diplotype", "phenotype", "cpic_level", "affected_drugs"],
+      "properties": {
+        "gene_symbol": {"type": "string"},
+        "diplotype": {"type": "string"},
+        "phenotype": {"type": "string"},
+        "activity_score": {"type": ["number", "null"]},
+        "copy_number": {"type": ["integer", "null"]},
+        "cpic_level": {"enum": ["A", "B", "C", "D"]},
+        "affected_drugs": {"type": "array", "items": {"type": "string"}},
+        "guideline_url": {"type": ["string", "null"]}
+      }
+    },
+
+    "GeneIndexRow": {
+      "type": "object",
+      "required": ["gene_symbol", "chrom", "start_pos", "end_pos", "variant_count", "actionable_count"],
+      "properties": {
+        "gene_symbol": {"type": "string"},
+        "chrom": {"type": "string"},
+        "start_pos": {"type": "integer"},
+        "end_pos": {"type": "integer"},
+        "variant_count": {"type": "integer", "minimum": 0},
+        "actionable_count": {"type": "integer", "minimum": 0}
+      }
+    },
+
+    "PrsRow": {
+      "type": "object",
+      "required": ["trait", "score_value", "percentile", "training_source", "training_date"],
+      "properties": {
+        "trait": {"type": "string"},
+        "score_value": {"type": "number"},
+        "percentile": {"type": "number", "minimum": 0, "maximum": 100},
+        "reference_population": {"type": ["string", "null"]},
+        "training_source": {"type": "string"},
+        "training_date": {"type": "string", "format": "date"},
+        "contributing_variants": {"type": ["array", "null"], "items": {"type": "string"}}
+      }
+    },
+
+    "ClinicalFindingRow": {
+      "type": "object",
+      "required": ["finding_id", "condition", "claim_type", "clinical_grade", "evidence_ids"],
+      "properties": {
+        "finding_id": {"type": "string"},
+        "variant_id": {"type": ["string", "null"]},
+        "gene_symbol": {"type": ["string", "null"]},
+        "condition": {"type": "string"},
+        "claim_type": {"$ref": "#/$defs/ClaimType"},
+        "classification": {"type": ["string", "null"]},
+        "clinical_grade": {"type": "boolean"},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+
+    "ClinicalEvidenceRow": {
+      "type": "object",
+      "required": ["evidence_id", "source", "source_version", "assertion", "retrieved_at"],
+      "properties": {
+        "evidence_id": {"type": "string"},
+        "finding_id": {"type": ["string", "null"]},
+        "variant_id": {"type": ["string", "null"]},
+        "source": {"type": "string"},
+        "source_record_id": {"type": ["string", "null"]},
+        "source_version": {"type": "string"},
+        "assertion": {"type": "string"},
+        "review_status": {"type": ["string", "null"]},
+        "retrieved_at": {"type": "string", "format": "date-time"}
+      }
+    },
+
+    "CallabilityRow": {
+      "type": "object",
+      "required": ["callability_id", "chrom", "pos", "assay_scope", "evidence_scope"],
+      "properties": {
+        "callability_id": {"type": "string"},
+        "variant_id": {"type": ["string", "null"]},
+        "gene_symbol": {"type": ["string", "null"]},
+        "chrom": {"type": "string"},
+        "pos": {"type": "integer", "minimum": 1},
+        "reference_observed": {"type": ["boolean", "null"]},
+        "callable": {"type": ["boolean", "null"]},
+        "call_confidence": {"enum": ["high", "medium", "low", null]},
+        "depth": {"type": ["integer", "null"], "minimum": 0},
+        "genotype_quality": {"type": ["number", "null"]},
+        "assay_scope": {"type": "string"},
+        "evidence_scope": {"enum": ["site", "target_panel", "derived_interval"]}
+      }
+    },
+
+    "CallableRegionRow": {
+      "type": "object",
+      "required": ["region_id", "chrom", "start_pos", "end_pos", "callable", "assay_scope", "derivation"],
+      "properties": {
+        "region_id": {"type": "string"},
+        "chrom": {"type": "string"},
+        "start_pos": {"type": "integer", "minimum": 1},
+        "end_pos": {"type": "integer", "minimum": 1},
+        "callable": {"type": "boolean"},
+        "minimum_depth": {"type": ["integer", "null"], "minimum": 0},
+        "assay_scope": {"type": "string"},
+        "derivation": {"type": "string"}
+      }
+    },
+
+    "ClaimType": {
+      "enum": [
+        "variant_classification", "carrier_status", "disease_risk",
+        "pharmacogenomic", "trait_association", "computational_prediction"
+      ]
+    },
+
+    "InterpretationRow": {
+      "type": "object",
+      "required": [
+        "interpretation_id", "interpretation_status", "claim_type",
+        "confirmation_required", "evidence_snapshot", "evidence_ids"
+      ],
+      "properties": {
+        "interpretation_id": {"type": "string"},
+        "finding_id": {"type": ["string", "null"]},
+        "variant_id": {"type": ["string", "null"]},
+        "gene_symbol": {"type": ["string", "null"]},
+        "interpretation_status": {"enum": ["algorithmic", "draft", "expert_reviewed", "guideline_based"]},
+        "claim_type": {"$ref": "#/$defs/ClaimType"},
+        "condition": {"type": ["string", "null"]},
+        "inheritance_model": {"type": ["string", "null"]},
+        "required_genotype": {"type": ["string", "null"]},
+        "observed_genotype": {"type": ["string", "null"]},
+        "genotype_matches_model": {"type": ["boolean", "null"]},
+        "penetrance": {"type": ["string", "null"]},
+        "effect_size": {"type": ["number", "null"]},
+        "analytical_confidence": {"enum": ["high", "medium", "low", null]},
+        "classification_review_status": {"type": ["string", "null"]},
+        "gene_disease_validity": {"type": ["string", "null"]},
+        "actionability_basis": {"type": ["string", "null"]},
+        "confirmation_required": {"type": "boolean"},
+        "reviewed_by": {"type": ["string", "null"]},
+        "reviewed_at": {"type": ["string", "null"], "format": "date-time"},
+        "evidence_snapshot": {"type": "string"},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"interpretation_status": {"const": "expert_reviewed"}}, "required": ["interpretation_status"]},
+          "then": {
+            "required": ["reviewed_by", "reviewed_at"],
+            "properties": {
+              "reviewed_by": {"type": "string", "minLength": 1},
+              "reviewed_at": {"type": "string", "format": "date-time"}
+            }
+          }
+        }
+      ]
+    },
+
+    "GwasAssociationRow": {
+      "type": "object",
+      "required": [
+        "association_id", "variant_id", "trait", "effect_allele",
+        "effect_size", "effect_type", "study_pmids", "source_version"
+      ],
+      "properties": {
+        "association_id": {"type": "string"},
+        "variant_id": {"type": "string"},
+        "trait": {"type": "string"},
+        "effect_allele": {"type": "string"},
+        "effect_size": {"type": "number"},
+        "effect_type": {"enum": ["beta", "odds_ratio", "hazard_ratio"]},
+        "p_value": {"type": ["number", "null"]},
+        "sample_size": {"type": ["integer", "null"]},
+        "study_pmids": {"type": "array", "items": {"type": "string"}},
+        "source_version": {"type": "string"}
+      }
+    },
+
+    "FieldGlossaryEntry": {
+      "type": "object",
+      "required": [
+        "type", "nullable", "null_meaning", "source", "derivation",
+        "allowed_values", "evidence_class", "observed_or_inferred",
+        "genome_build", "version_or_snapshot", "confidence_semantics",
+        "absence_meaning", "related_evidence"
+      ],
+      "properties": {
+        "type": {"type": "string"},
+        "nullable": {"type": "boolean"},
+        "null_meaning": {"type": "string"},
+        "source": {"type": "string"},
+        "derivation": {"type": "string"},
+        "allowed_values": {"type": ["array", "null"]},
+        "evidence_class": {"$ref": "#/$defs/EvidenceClass"},
+        "observed_or_inferred": {"enum": ["observed", "inferred", "metadata"]},
+        "genome_build": {"type": ["string", "null"]},
+        "version_or_snapshot": {"type": "string"},
+        "confidence_semantics": {"type": "string"},
+        "absence_meaning": {"type": "string"},
+        "related_evidence": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+
+    "FieldGlossary": {
+      "type": "object",
+      "required": ["schema_version", "fields"],
+      "properties": {
+        "schema_version": {"const": "1.1.0"},
+        "fields": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/FieldGlossaryEntry"}
+        }
+      }
+    },
+
+    "Inventory": {
+      "type": "object",
+      "required": ["schema_version", "entries"],
+      "properties": {
+        "schema_version": {"const": "1.1.0"},
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "media_type", "logical_role", "required", "authority"],
+            "properties": {
+              "path": {"type": "string"},
+              "media_type": {"type": "string"},
+              "logical_role": {"type": "string"},
+              "required": {"type": "boolean"},
+              "bytes": {"type": ["integer", "null"], "minimum": 0},
+              "sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+              "rows": {"type": ["integer", "null"]},
+              "authority": {"enum": ["authoritative_data", "derived_data", "metadata", "operational_guidance", "evaluation"]}
+            }
+          }
+        }
+      }
+    },
+
+    "RawArtifacts": {
+      "type": "object",
+      "required": ["schema_version", "artifacts"],
+      "properties": {
+        "schema_version": {"const": "1.1.0"},
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["artifact_type", "disposition", "reason", "limitations"],
+            "properties": {
+              "artifact_type": {"type": "string"},
+              "disposition": {"enum": ["embedded", "separate", "referenced", "deleted", "never_received"]},
+              "reason": {"type": "string"},
+              "integrity_identifier": {"type": ["string", "null"]},
+              "limitations": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+
+    "Transformations": {
+      "type": "object",
+      "required": ["schema_version", "stages"],
+      "properties": {
+        "schema_version": {"const": "1.1.0"},
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["stage_id", "software", "software_version", "configuration_digest", "inputs", "outputs", "status"],
+            "properties": {
+              "stage_id": {"type": "string"},
+              "software": {"type": "string"},
+              "software_version": {"type": "string"},
+              "configuration_digest": {"type": "string"},
+              "inputs": {"type": "array", "items": {"type": "string"}},
+              "outputs": {"type": "array", "items": {"type": "string"}},
+              "started_at": {"type": ["string", "null"], "format": "date-time"},
+              "completed_at": {"type": ["string", "null"], "format": "date-time"},
+              "status": {"enum": ["completed", "partial", "failed", "skipped"]}
+            }
+          }
+        }
+      }
+    },
+
+    "Omissions": {
+      "type": "object",
+      "required": ["schema_version", "omissions"],
+      "properties": {
+        "schema_version": {"const": "1.1.0"},
+        "omissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["scope", "reason", "pipeline_stage", "interpretation_consequence", "recovery"],
+            "properties": {
+              "scope": {"type": "string"},
+              "reason": {"type": "string"},
+              "pipeline_stage": {"type": "string"},
+              "interpretation_consequence": {"type": "string"},
+              "recovery": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+
+    "Relationships": {
+      "type": "object",
+      "required": ["schema_version", "relationships"],
+      "properties": {
+        "schema_version": {"const": "1.1.0"},
+        "relationships": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["relationship_id", "source", "target", "cardinality", "completeness", "unmatched_meaning"],
+            "properties": {
+              "relationship_id": {"type": "string"},
+              "source": {"type": "array", "items": {"type": "string"}},
+              "target": {"type": "array", "items": {"type": "string"}},
+              "cardinality": {"enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"]},
+              "completeness": {"enum": ["complete", "partial"]},
+              "unmatched_meaning": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+
+    "Manifest": {
+      "type": "object",
+      "required": [
+        "schema_version", "pipeline_version", "genome_build", "generated_at",
+        "annotation_sources", "consensus_definitions", "normalization", "files"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.1.0"},
+        "pipeline_version": {"type": "string"},
+        "source_bundle_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "genome_build": {"const": "GRCh38"},
+        "generated_at": {"type": "string", "format": "date-time"},
+        "annotation_sources": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "consensus_definitions": {
+          "type": "object",
+          "required": ["is_rare", "is_actionable", "consensus_damaging", "clinical_grade"],
+          "properties": {
+            "is_rare": {"type": "object"},
+            "is_actionable": {"type": "object"},
+            "consensus_damaging": {"type": "object"},
+            "clinical_grade": {"type": "object"}
+          }
+        },
+        "normalization": {"type": "string"},
+        "profiles": {
+          "type": "object",
+          "properties": {
+            "agent_exploration": {"type": "string", "pattern": "^1\\.\\d+\\.\\d+$"}
+          }
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["sha256"],
+            "properties": {
+              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+              "rows": {"type": ["integer", "null"]},
+              "bytes": {"type": ["integer", "null"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}

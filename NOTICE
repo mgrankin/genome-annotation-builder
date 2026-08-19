@@ -1,0 +1,25 @@
+Genome Annotation Builder
+
+This product implements the public .genome/1.1 format published by
+genome.computer. The upstream specification and schema remain the work of
+their respective authors and are retrieved at a pinned revision with checksum
+verification; they are not modified silently by this project.
+
+The vendored ACMG Secondary Findings/ClinGen policy snapshot and the separate
+ClinGen gene-disease validity/dosage-sensitivity snapshot contain curated
+content obtained from the Clinical Genome Resource (ClinGen) on 2026-08-15.
+ClinGen releases curated content under CC0 1.0 and requests attribution and the
+date accessed. Source and policy identifiers are recorded in resource
+manifests; no ClinGen logo is redistributed.
+
+Optional third-party prediction databases are not included in this source
+distribution or licensed under this project's Apache-2.0 licence. The pipeline
+can locally acquire checksum-pinned releases after the operator reviews their
+terms. The recorded conservative boundaries are: LOFTEE source under MIT while
+redistribution terms for its ancillary GRCh38 data are not stated; CADD v1.7
+for non-commercial use unless separately licensed; REVEL for academic/non-
+commercial use with redistribution not granted by the recorded source;
+AlphaMissense under the exact hosted file's CC BY-NC-SA 4.0 notice (stricter
+than the upstream repository's CC BY 4.0 statement); and Ensembl/upstream
+SpliceAI terms requiring an independent redistribution review. Generated
+bundles reference resource digests and terms but never embed these databases.

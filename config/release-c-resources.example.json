@@ -1,0 +1,113 @@
+{
+  "dataset_profiles": {
+    "TECHNICAL_DATASET_01": {
+      "readback-bounded-pysam-0.24.0": {
+        "roles": {
+          "target_manifest": {
+            "path": "../local/targets/dataset-01.tsv"
+          }
+        }
+      }
+    }
+  },
+  "profiles": {
+    "cnvpytor-combined-rd-baf-1.3.2": {
+      "roles": {
+        "call_capture": {
+          "path": "../local/tools/cnvpytor_call_capture.py"
+        },
+        "cnvpytor_package_data": {
+          "path": "../local/resources/cnvpytor/package-data",
+          "tree_manifest_path": "../local/manifests/cnvpytor-package-data.tree.json"
+        },
+        "cnvpytor_source_data": {
+          "path": "../local/resources/cnvpytor/source-data",
+          "tree_manifest_path": "../local/manifests/cnvpytor-source-data.tree.json"
+        },
+        "gc_resource": {
+          "path": "../local/resources/cnvpytor/gc_exact_grch38.pytor"
+        },
+        "hdf5_probe": {
+          "path": "../local/tools/cnvpytor_combined_hdf5_probe.py"
+        },
+        "reference_config": {
+          "path": "../local/resources/cnvpytor/reference_genomes_conf.py"
+        }
+      }
+    },
+    "delly-short-read-2.5.1": {
+      "roles": {
+        "delly_binary": {
+          "path": "../local/tools/delly"
+        },
+        "delly_exclude": {
+          "path": "../local/resources/delly/human.GRCh38.excl.tsv"
+        }
+      }
+    },
+    "expansionhunter-grch38-female-5.0.0": {
+      "roles": {
+        "expansionhunter_binary": {
+          "path": "../local/tools/ExpansionHunter"
+        },
+        "variant_catalog": {
+          "path": "../local/resources/repeats/variant_catalog.json"
+        }
+      }
+    },
+    "expansionhunter-grch38-male-5.0.0": {
+      "roles": {
+        "expansionhunter_binary": {
+          "path": "../local/tools/ExpansionHunter"
+        },
+        "variant_catalog": {
+          "path": "../local/resources/repeats/variant_catalog.json"
+        }
+      }
+    },
+    "gatk-mitochondria-normal-shifted-4.6.2.0": {
+      "roles": {
+        "bwa_binary": {
+          "path": "../local/tools/bwa"
+        },
+        "mt_call_policy": {
+          "path": "../local/config/mt-call-policy.json"
+        },
+        "mt_resource_tree": {
+          "path": "../local/resources/mitochondria/production-tree",
+          "tree_manifest_path": "../local/manifests/mitochondria.tree.json"
+        },
+        "mt_workflow": {
+          "path": "../local/tools/mt_workflow.py"
+        }
+      }
+    },
+    "hla-la-short-read-1.0.4": {
+      "roles": {
+        "hla_graph": {
+          "path": "../local/resources/hla-la/graph",
+          "tree_manifest_path": "../local/manifests/hla-la-graph.tree.json"
+        }
+      }
+    },
+    "manta-germline-1.6.0": {
+      "roles": {}
+    },
+    "readback-bounded-pysam-0.24.0": {
+      "roles": {
+        "readback_capture": {
+          "path": "../local/tools/readback_capture.py"
+        }
+      }
+    },
+    "spechla-short-read-bam-1.0.12": {
+      "roles": {
+        "spechla_database": {
+          "path": "../local/resources/spechla/database",
+          "tree_manifest_path": "../local/manifests/spechla-database.tree.json"
+        }
+      }
+    }
+  },
+  "schema_version": 1
+}

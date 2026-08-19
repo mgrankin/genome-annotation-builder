@@ -1,0 +1,9 @@
+{
+  "contamination_estimate": null,
+  "max_alt_allele_count": 4,
+  "max_reads_per_alignment_start": 75,
+  "min_allele_fraction": 0.0,
+  "schema_version": 1,
+  "source_contig": "MT",
+  "threads": 4
+}

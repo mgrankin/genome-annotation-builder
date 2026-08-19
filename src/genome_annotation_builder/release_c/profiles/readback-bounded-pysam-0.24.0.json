@@ -1,0 +1,142 @@
+{
+  "artifact": {
+    "components": {
+      "raw_capture_json": "readback/capture.json"
+    },
+    "derived_payload": null,
+    "identity_scheme": "file_sha256",
+    "raw_artifact_id": "bounded-readback-capture-json"
+  },
+  "caller_name": "GAB bounded local pileup",
+  "caller_version": "1",
+  "command_semantics": {
+    "environment": {
+      "LC_ALL": "C",
+      "TMPDIR": "{working_directory}/tmp"
+    },
+    "parameters": {
+      "duplicate_reads_included": false,
+      "max_depth": 1000000,
+      "minimum_alt_fragments": 3,
+      "minimum_base_quality": 20,
+      "minimum_mapping_quality": 20,
+      "nearby_indel_window": 10,
+      "overlapping_mate_policy": "collapse_by_query_name",
+      "pysam_version": "0.24.0"
+    },
+    "steps": [
+      {
+        "arguments": [
+          "-p",
+          "{working_directory}/readback",
+          "{working_directory}/tmp"
+        ],
+        "entrypoint": "mkdir",
+        "name": "prepare_workspace"
+      },
+      {
+        "arguments": [
+          "{readback_capture}",
+          "--alignment",
+          "{selected_alignment}",
+          "--reference-fasta",
+          "{reference_fasta}",
+          "--target-manifest",
+          "{target_manifest}",
+          "--output",
+          "{working_directory}/readback/capture.json",
+          "--minimum-mapping-quality",
+          "20",
+          "--minimum-base-quality",
+          "20",
+          "--minimum-alt-fragments",
+          "3",
+          "--nearby-indel-window",
+          "10",
+          "--max-depth",
+          "1000000"
+        ],
+        "entrypoint": "python3",
+        "name": "capture"
+      }
+    ]
+  },
+  "gate_caller": "readback",
+  "image": "quay.io/biocontainers/pysam@sha256:3097afa2a5d7dbd9cc3e2b1d53adf3f0e9ef1a1a3bdb5076a88c0bf8547f290b",
+  "licence": "Apache-2.0 for the mounted capture script; MIT for pysam 0.24.0; the Bioconda runtime retains its upstream terms",
+  "limits": {
+    "cpus": 2.0,
+    "memory_bytes": 8589934592,
+    "pids": 512,
+    "shm_bytes": 1073741824
+  },
+  "mounts": [
+    {
+      "container_path": "/tools/readback_capture.py",
+    "expected_sha256": "b4c87b153d91250f9fa623c3b74d55bbb6812e96fdcf0a0f846012ed866d1b49",
+      "kind": "file",
+      "mode": "ro",
+      "role": "readback_capture"
+    },
+    {
+      "container_path": "/inputs/alignment.bam",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment"
+    },
+    {
+      "container_path": "/inputs/alignment.bam.bai",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment_index"
+    },
+  {
+    "container_path": "/inputs/reference.fa",
+    "expected_sha256": "1e74081a49ceb9739cc14c812fbb8b3db978eb80ba8e5350beb80d8ad8dfef3b",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fasta"
+    },
+  {
+    "container_path": "/inputs/reference.fa.fai",
+    "expected_sha256": "0998f61682f4041b11f0d156e1db6dae3e4c743e26643a3f45ea7faea70cb604",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fai"
+    },
+    {
+      "container_path": "/inputs/targets.tsv",
+      "kind": "file",
+      "mode": "ro",
+      "role": "target_manifest"
+    },
+    {
+      "container_path": "/provenance/resources.json",
+      "kind": "file",
+      "mode": "ro",
+      "role": "resource_manifest"
+    },
+    {
+      "container_path": "/work",
+      "kind": "directory",
+      "mode": "rw",
+      "role": "workspace"
+    }
+  ],
+  "placeholder_bindings": {
+    "{readback_capture}": "/tools/readback_capture.py",
+    "{reference_fasta}": "/inputs/reference.fa",
+    "{selected_alignment}": "/inputs/alignment.bam",
+    "{target_manifest}": "/inputs/targets.tsv",
+    "{working_directory}": "/work"
+  },
+  "profile_id": "readback-bounded-pysam-0.24.0",
+  "schema_version": 1,
+  "tmpfs": [
+    {
+      "bytes": 1073741824,
+      "container_path": "/tmp",
+      "executable": false
+    }
+  ]
+}

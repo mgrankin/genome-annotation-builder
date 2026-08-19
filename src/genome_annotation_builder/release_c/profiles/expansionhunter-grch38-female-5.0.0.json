@@ -1,0 +1,132 @@
+{
+  "artifact": {
+    "components": {
+      "expansionhunter_json_sha256": "expansionhunter/SUBJECT.json",
+      "expansionhunter_vcf_sha256": "expansionhunter/SUBJECT.vcf"
+    },
+    "derived_payload": null,
+    "identity_scheme": "named_sha256_set",
+    "raw_artifact_id": "expansionhunter-call-pair"
+  },
+  "caller_name": "ExpansionHunter",
+  "caller_version": "5.0.0",
+  "command_semantics": {
+    "environment": {
+      "LC_ALL": "C",
+      "TMPDIR": "{working_directory}/tmp"
+    },
+    "parameters": {
+      "binary_sha256": "3dc7a14aa869b93bc45be413cc65a0c17801f7be8c5097fa7d86e608fefc8762",
+      "catalog_policy": "exact-reference projected ExpansionHunter catalogue",
+      "sex_model": "female",
+      "threads": 8
+    },
+    "steps": [
+      {
+        "arguments": [
+          "-p",
+          "{working_directory}/expansionhunter",
+          "{working_directory}/tmp"
+        ],
+        "entrypoint": "mkdir",
+        "name": "prepare_workspace"
+      },
+      {
+        "arguments": [
+          "--reads",
+          "{selected_alignment}",
+          "--reference",
+          "{reference_fasta}",
+          "--variant-catalog",
+          "{variant_catalog}",
+          "--output-prefix",
+          "{working_directory}/expansionhunter/SUBJECT",
+          "--sex",
+          "female",
+          "--threads",
+          "8"
+        ],
+        "entrypoint": "ExpansionHunter",
+        "name": "call"
+      }
+    ]
+  },
+  "gate_caller": "expansionhunter",
+  "image": "broadinstitute/gatk@sha256:71b17ee42d149e8ec112603f5305c873ab60d93949ef8bb62a4fff85427f56fb",
+  "licence": "Apache-2.0 for ExpansionHunter 5.0.0; GATK runtime retains its upstream terms; repeat catalogue acquired separately",
+  "limits": {
+    "cpus": 8.0,
+    "memory_bytes": 68719476736,
+    "pids": 4096,
+    "shm_bytes": 2147483648
+  },
+  "mounts": [
+    {
+      "container_path": "/usr/local/bin/ExpansionHunter",
+      "expected_sha256": "3dc7a14aa869b93bc45be413cc65a0c17801f7be8c5097fa7d86e608fefc8762",
+      "kind": "file",
+      "mode": "ro",
+      "role": "expansionhunter_binary"
+    },
+  {
+    "container_path": "/inputs/reference.fa",
+    "expected_sha256": "1e74081a49ceb9739cc14c812fbb8b3db978eb80ba8e5350beb80d8ad8dfef3b",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fasta"
+    },
+  {
+    "container_path": "/inputs/reference.fa.fai",
+    "expected_sha256": "0998f61682f4041b11f0d156e1db6dae3e4c743e26643a3f45ea7faea70cb604",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fai"
+    },
+    {
+      "container_path": "/provenance/resources.json",
+      "kind": "file",
+      "mode": "ro",
+      "role": "resource_manifest"
+    },
+    {
+      "container_path": "/inputs/alignment.bam",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment"
+    },
+    {
+      "container_path": "/inputs/alignment.bam.bai",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment_index"
+    },
+    {
+      "container_path": "/resources/variant_catalog.json",
+      "expected_sha256": "a144a46fe72ab0ca97b51050a1a55d5857c33e404727637b3a59e6d81b701103",
+      "kind": "file",
+      "mode": "ro",
+      "role": "variant_catalog"
+    },
+    {
+      "container_path": "/work",
+      "kind": "directory",
+      "mode": "rw",
+      "role": "workspace"
+    }
+  ],
+  "placeholder_bindings": {
+    "{reference_fasta}": "/inputs/reference.fa",
+    "{selected_alignment}": "/inputs/alignment.bam",
+    "{variant_catalog}": "/resources/variant_catalog.json",
+    "{working_directory}": "/work"
+  },
+  "profile_id": "expansionhunter-grch38-female-5.0.0",
+  "schema_version": 1,
+  "tmpfs": [
+    {
+      "bytes": 8589934592,
+      "container_path": "/tmp",
+      "executable": false
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "fixed_profiles": [
+    "manta-germline-1.6.0",
+    "delly-short-read-2.5.1",
+    "cnvpytor-combined-rd-baf-1.3.2",
+    "hla-la-short-read-1.0.4",
+    "spechla-short-read-bam-1.0.12",
+    "gatk-mitochondria-normal-shifted-4.6.2.0",
+    "readback-bounded-pysam-0.24.0"
+  ],
+  "karyotype_profiles": {
+    "XX": "expansionhunter-grch38-female-5.0.0",
+    "XY": "expansionhunter-grch38-male-5.0.0"
+  },
+  "schema_version": 1
+}

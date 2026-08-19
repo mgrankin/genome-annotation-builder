@@ -1,0 +1,41 @@
+# Copy this file to an ignored local path before editing it. The populated file
+# contains private identifiers and filesystem paths and must never be committed.
+schema_version: 1
+
+reference:
+  assembly: GRCh38 primary assembly
+  fasta_path: ../local/reference/GRCh38.fa
+  fai_path: ../local/reference/GRCh38.fa.fai
+  dictionary_path: ../local/reference/GRCh38.dict
+
+# Each key is the caller name used by the input gate. Its value selects the
+# alignment role that every technical dataset must provide.
+caller_alignment_policy:
+  manta: original_markdup_bam
+  delly: original_markdup_bam
+  cnvpytor: original_markdup_bam
+  expansionhunter: original_markdup_bam
+  hla_la: original_markdup_bam
+  spechla: original_markdup_bam
+  gatk_mitochondria: bqsr_cram
+  readback: original_markdup_bam
+
+datasets:
+  - dataset_id: TECHNICAL_DATASET_01
+    logical_subject: SUBJECT_01
+    technical_role: primary
+    laboratory: LABORATORY_01
+    original_markdup_bam:
+      path: ../local/alignments/subject-01.markdup.bam
+      index_path: ../local/alignments/subject-01.markdup.bam.bai
+    bqsr_cram:
+      path: ../local/alignments/subject-01.bqsr.cram
+      index_path: ../local/alignments/subject-01.bqsr.cram.crai
+    baf_vcf:
+      path: ../local/baf/subject-01.baf.vcf.gz
+      index_path: ../local/baf/subject-01.baf.vcf.gz.tbi
+      sample: VCF_SAMPLE_ALIAS_01
+
+  # Add another row for an independently sequenced technical replicate. Keep
+  # the same logical_subject, use a new dataset_id, and set technical_role to
+  # technical_replicate. Never merge the source identities before concordance.

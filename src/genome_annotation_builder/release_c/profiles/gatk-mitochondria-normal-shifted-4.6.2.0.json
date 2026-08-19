@@ -1,0 +1,159 @@
+{
+  "artifact": {
+    "components": {
+      "filtered_vcf": "mt/filtered.vcf"
+    },
+    "derived_payload": null,
+    "identity_scheme": "file_sha256",
+    "raw_artifact_id": "gatk-mitochondrial-filtered-vcf"
+  },
+  "caller_name": "GATK Mutect2 mitochondrial mode",
+  "caller_version": "4.6.2.0",
+  "command_semantics": {
+    "environment": {
+      "HOME": "{working_directory}/home",
+      "LC_ALL": "C",
+      "TMPDIR": "{working_directory}/tmp"
+    },
+    "parameters": {
+      "bwa_binary_sha256": "c55e7854bd19284ff72a1f1ceb0319a611ac3be7359a97d9ffb18ca0a0d04184",
+      "circular_boundary_control": "normal chrM:576-16024 plus 8000-base-shifted chrM:8025-9144",
+      "mt_length": 16569,
+      "mt_sequence_md5": "c68f52674c9fb33aef52dcf399755519",
+      "policy_boundary": "identifier-free per-alignment source-contig, thread, AF and contamination policy",
+      "shift_bases": 8000,
+      "shifted_mt_sequence_md5": "8ca1f1339b6185c6f63cf3752285cc37",
+      "workflow_contract_version": 1,
+      "workflow_source_sha256": "956e428eafd4a838c51bdb3cfc008d2709ec592071434d2c7f20e25a830322ec"
+    },
+    "steps": [
+      {
+        "arguments": [
+          "{mt_workflow}",
+          "--alignment",
+          "{selected_alignment}",
+          "--alignment-index",
+          "{selected_alignment_index}",
+          "--full-reference",
+          "{reference_fasta}",
+          "--full-reference-fai",
+          "{reference_fai}",
+          "--full-reference-dict",
+          "{reference_dictionary}",
+          "--mt-resource-root",
+          "{mt_resource_tree}",
+          "--policy",
+          "{mt_call_policy}",
+          "--workspace",
+          "{working_directory}"
+        ],
+        "entrypoint": "python3",
+        "name": "call_normal_and_shifted_mitochondria"
+      }
+    ]
+  },
+  "gate_caller": "gatk_mitochondria",
+  "image": "broadinstitute/gatk@sha256:71b17ee42d149e8ec112603f5305c873ab60d93949ef8bb62a4fff85427f56fb",
+  "licence": "BSD-3-Clause for GATK 4.6.2.0 and mitochondrial WDL source; BWA GPLv3; reference-resource terms remain separately attributable",
+  "limits": {
+    "cpus": 4.0,
+    "memory_bytes": 68719476736,
+    "pids": 4096,
+    "shm_bytes": 2147483648
+  },
+  "mounts": [
+    {
+      "container_path": "/usr/local/bin/bwa",
+      "expected_sha256": "c55e7854bd19284ff72a1f1ceb0319a611ac3be7359a97d9ffb18ca0a0d04184",
+      "kind": "file",
+      "mode": "ro",
+      "role": "bwa_binary"
+    },
+  {
+    "container_path": "/config/mt-policy.json",
+      "expected_sha256": "84538bca883ce6d2baf3376f4847e7a0444ecffaede1ac25510865552b18247b",
+      "kind": "file",
+      "mode": "ro",
+      "role": "mt_call_policy"
+    },
+    {
+      "container_path": "/resources/mt",
+      "expected_tree_manifest_sha256": "aec2a4d3bc1919a7d5896dc768cc584a82eaf690fc02a4fce770b25c51a0aa36",
+      "kind": "directory",
+      "mode": "ro",
+      "role": "mt_resource_tree"
+    },
+    {
+      "container_path": "/pipeline/mt_workflow.py",
+      "expected_sha256": "956e428eafd4a838c51bdb3cfc008d2709ec592071434d2c7f20e25a830322ec",
+      "kind": "file",
+      "mode": "ro",
+      "role": "mt_workflow"
+    },
+    {
+      "container_path": "/inputs/reference.dict",
+      "expected_sha256": "81ff43dc64ac3a7352cb23bd4193f4d88a87d66ae6c5403a304ca81664cfe377",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_dictionary"
+    },
+    {
+      "container_path": "/inputs/reference.fa",
+      "expected_sha256": "1e74081a49ceb9739cc14c812fbb8b3db978eb80ba8e5350beb80d8ad8dfef3b",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fasta"
+    },
+    {
+      "container_path": "/inputs/reference.fa.fai",
+      "expected_sha256": "0998f61682f4041b11f0d156e1db6dae3e4c743e26643a3f45ea7faea70cb604",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fai"
+    },
+    {
+      "container_path": "/provenance/resources.json",
+      "kind": "file",
+      "mode": "ro",
+      "role": "resource_manifest"
+    },
+    {
+      "container_path": "/inputs/alignment.cram",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment"
+    },
+    {
+      "container_path": "/inputs/alignment.cram.crai",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment_index"
+    },
+    {
+      "container_path": "/work",
+      "kind": "directory",
+      "mode": "rw",
+      "role": "workspace"
+    }
+  ],
+  "placeholder_bindings": {
+    "{mt_call_policy}": "/config/mt-policy.json",
+    "{mt_resource_tree}": "/resources/mt",
+    "{mt_workflow}": "/pipeline/mt_workflow.py",
+    "{reference_dictionary}": "/inputs/reference.dict",
+    "{reference_fai}": "/inputs/reference.fa.fai",
+    "{reference_fasta}": "/inputs/reference.fa",
+    "{selected_alignment}": "/inputs/alignment.cram",
+    "{selected_alignment_index}": "/inputs/alignment.cram.crai",
+    "{working_directory}": "/work"
+  },
+  "profile_id": "gatk-mitochondria-normal-shifted-4.6.2.0",
+  "schema_version": 1,
+  "tmpfs": [
+    {
+      "bytes": 8589934592,
+      "container_path": "/tmp",
+      "executable": false
+    }
+  ]
+}

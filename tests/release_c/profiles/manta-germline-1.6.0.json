@@ -1,0 +1,117 @@
+{
+  "artifact": {
+    "components": {
+      "primary_vcf": "manta/results/variants/diploidSV.vcf.gz"
+    },
+    "derived_payload": null,
+    "identity_scheme": "file_sha256",
+    "raw_artifact_id": "manta-diploid-sv-vcf"
+  },
+  "caller_name": "Manta",
+  "caller_version": "1.6.0",
+  "command_semantics": {
+    "environment": {
+      "LC_ALL": "C",
+      "TMPDIR": "{working_directory}/tmp"
+    },
+    "parameters": {
+      "jobs": 8,
+      "mode": "local",
+      "workflow": "germline diploid SV"
+    },
+    "steps": [
+      {
+        "arguments": [
+          "-p",
+          "{working_directory}/tmp"
+        ],
+        "entrypoint": "mkdir",
+        "name": "prepare_workspace"
+      },
+      {
+        "arguments": [
+          "--bam",
+          "{selected_alignment}",
+          "--referenceFasta",
+          "{reference_fasta}",
+          "--runDir",
+          "{working_directory}/manta"
+        ],
+        "entrypoint": "configManta.py",
+        "name": "configure"
+      },
+      {
+        "arguments": [
+          "{working_directory}/manta/runWorkflow.py",
+          "-m",
+          "local",
+          "-j",
+          "8"
+        ],
+        "entrypoint": "python2",
+        "name": "call"
+      }
+    ]
+  },
+  "gate_caller": "manta",
+  "image": "quay.io/biocontainers/manta@sha256:021aabe5f7314e02e60722c559f6f3c4bb6b1118c2e2ec0eb3095a8c7e431f26",
+  "licence": "GPL-3.0-or-later at the Manta v1.6.0 tag",
+  "limits": {
+    "cpus": 8.0,
+    "memory_bytes": 34359738368,
+    "pids": 2048,
+    "shm_bytes": 2147483648
+  },
+  "mounts": [
+    {
+      "container_path": "/inputs/alignment.bam",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment"
+    },
+    {
+      "container_path": "/inputs/alignment.bam.bai",
+      "kind": "file",
+      "mode": "ro",
+      "role": "selected_alignment_index"
+    },
+    {
+      "container_path": "/inputs/reference.fa",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fasta"
+    },
+    {
+      "container_path": "/inputs/reference.fa.fai",
+      "kind": "file",
+      "mode": "ro",
+      "role": "reference_fai"
+    },
+    {
+      "container_path": "/provenance/resources.json",
+      "kind": "file",
+      "mode": "ro",
+      "role": "resource_manifest"
+    },
+    {
+      "container_path": "/work",
+      "kind": "directory",
+      "mode": "rw",
+      "role": "workspace"
+    }
+  ],
+  "placeholder_bindings": {
+    "{reference_fasta}": "/inputs/reference.fa",
+    "{selected_alignment}": "/inputs/alignment.bam",
+    "{working_directory}": "/work"
+  },
+  "profile_id": "manta-germline-1.6.0",
+  "schema_version": 1,
+  "tmpfs": [
+    {
+      "bytes": 8589934592,
+      "container_path": "/tmp",
+      "executable": false
+    }
+  ]
+}

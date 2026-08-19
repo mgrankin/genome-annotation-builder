@@ -1,0 +1,95 @@
+[build-system]
+requires = ["setuptools>=77.0.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genome-annotation-builder"
+version = "0.2.0"
+description = "Reproducible, evidence-preserving builder and validator for .genome/1.1 bundles"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{name = "Genome Annotation Builder contributors"}]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "duckdb>=1.1,<2",
+  "jsonschema>=4.18,<5",
+  "openpyxl>=3.1,<4",
+  "pyarrow>=17,<22",
+  "pysam>=0.22,<0.24",
+  "pytz>=2024.1",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "hypothesis>=6.100,<7",
+  "pytest>=8,<9",
+  "pytest-cov>=5,<7",
+  "ruff>=0.9,<1",
+]
+workflow = ["snakemake>=8,<9"]
+
+[project.scripts]
+genome-annotation-builder = "genome_annotation_builder.cli:main"
+gab = "genome_annotation_builder.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+genome_annotation_builder = [
+  "vendor/acmg_sf/*.json",
+  "vendor/clingen/*.json",
+  "vendor/genome_spec/LICENSE",
+  "vendor/genome_spec/SPEC.md",
+  "vendor/genome_spec/schema.json",
+  "vendor/genome_spec/profiles/*.json",
+  "vendor/genome_spec/reference/*.py",
+  "vendor/genome_spec/scripts/*",
+  "vendor_patches/*.patch",
+  "release_c/profiles/*.json",
+]
+
+[tool.setuptools.exclude-package-data]
+genome_annotation_builder = [
+  "**/__pycache__/*",
+  "**/*.pyc",
+  "**/*.pyo",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["genome_annotation_builder"]
+
+[tool.coverage.report]
+fail_under = 60
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["src/genome_annotation_builder/vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+# This helper is mounted into a checksum-pinned OCI lifecycle. Formatting it
+# would change the audited executable boundary without changing semantics.
+exclude = ["src/genome_annotation_builder/release_c/readback_capture.py"]
