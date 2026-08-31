@@ -312,9 +312,13 @@ cache mounts.
 Before and after VEP, an order-sensitive digest covers CHROM, POS, REF, ALT,
 GT, phase, and source-provenance identifiers. Any change is fatal. CSQ is not
 stored as an opaque interpretation surface: every transcript is percent-
-decoded into a typed list. Transcript selection is deterministic (MANE Select,
-MANE Plus Clinical, canonical, APPRIS principal, then consequence severity),
-while `most_severe` is calculated independently across all transcripts.
+decoded into a typed list. Transcript selection is gene-aware and
+deterministic: MANE Select, MANE Plus Clinical, canonical, APPRIS principal,
+and consequence severity choose one representative within each gene; the
+primary gene is then chosen by the representative consequence before
+transcript rank. `most_severe` is calculated independently across all
+transcripts. This prevents a nearby gene's upstream/downstream MANE annotation
+from overriding a coding consequence in another gene.
 
 Cache-provided gnomAD genome frequencies take precedence over exome
 frequencies for core population fields. Population max considers every

@@ -26,9 +26,10 @@ small-variant core:
 - optionally runs Ensembl VEP 116.0 entirely offline against the checksum-
   pinned GRCh38 cache, verifies that no allele or genotype changed, and parses
   every transcript annotation into typed structures;
-- materializes a gene query index from all annotated transcript memberships,
-  while retaining a deterministic MANE/canonical selected annotation and the
-  independently most-severe consequence;
+- materializes a gene query index from all annotated transcript memberships;
+  selects a deterministic MANE/canonical representative within each gene,
+  chooses the primary gene by the representative consequence, and retains the
+  independently most-severe consequence across every transcript;
 - optionally materializes the immutable ClinGen 2026-08-15 gene-disease
   validity and GRCh38 dosage-sensitivity snapshots, then projects only exact
   HGNC-symbol matches into two gene-context extensions; these rows never enter

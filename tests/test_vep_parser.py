@@ -126,6 +126,112 @@ def test_transcript_selection_and_most_severe_are_independent(tmp_path: Path) ->
     assert predictions["consensus_damaging"] is False
 
 
+@pytest.mark.parametrize(
+    (
+        "target_symbol",
+        "target_gene",
+        "target_feature",
+        "target_mane",
+        "target_appris",
+        "target_hgvsc",
+        "neighbor_symbol",
+        "neighbor_gene",
+        "neighbor_feature",
+        "neighbor_mane",
+        "neighbor_appris",
+        "neighbor_consequence",
+    ),
+    (
+        (
+            "MTHFR",
+            "ENSG00000177000.17",
+            "ENST00000376590.9",
+            "NM_005957.5",
+            "A1",
+            "ENST00000376590.9%3Ac.1286A%3EC",
+            "C1orf167",
+            "ENSG00000215910.9",
+            "ENST00000688073.1",
+            "NM_001010881.2",
+            "P2",
+            "downstream_gene_variant",
+        ),
+        (
+            "MTRR",
+            "ENSG00000124275.16",
+            "ENST00000440940.7",
+            "NM_002454.3",
+            "P4",
+            "ENST00000440940.7%3Ac.66A%3EG",
+            "FASTKD3",
+            "ENSG00000124279.14",
+            "ENST00000264669.10",
+            "NM_024091.4",
+            "P1",
+            "upstream_gene_variant",
+        ),
+    ),
+)
+def test_primary_gene_consequence_precedes_cross_gene_transcript_rank(
+    tmp_path: Path,
+    target_symbol: str,
+    target_gene: str,
+    target_feature: str,
+    target_mane: str,
+    target_appris: str,
+    target_hgvsc: str,
+    neighbor_symbol: str,
+    neighbor_gene: str,
+    neighbor_feature: str,
+    neighbor_mane: str,
+    neighbor_appris: str,
+    neighbor_consequence: str,
+) -> None:
+    target = _csq_row(
+        Allele="G",
+        Consequence="missense_variant",
+        IMPACT="MODERATE",
+        SYMBOL=target_symbol,
+        Gene=target_gene,
+        Feature_type="Transcript",
+        Feature=target_feature,
+        BIOTYPE="protein_coding",
+        HGVSc=target_hgvsc,
+        CANONICAL="YES",
+        MANE_SELECT=target_mane,
+        APPRIS=target_appris,
+        ALLELE_NUM="1",
+    )
+    neighbor = _csq_row(
+        Allele="G",
+        Consequence=neighbor_consequence,
+        IMPACT="MODIFIER",
+        SYMBOL=neighbor_symbol,
+        Gene=neighbor_gene,
+        Feature_type="Transcript",
+        Feature=neighbor_feature,
+        BIOTYPE="protein_coding",
+        CANONICAL="YES",
+        MANE_SELECT=neighbor_mane,
+        APPRIS=neighbor_appris,
+        ALLELE_NUM="1",
+    )
+    handle, record = _record(tmp_path, [neighbor, target])
+    try:
+        annotation = VepParser.from_header(handle.header).parse(record)
+    finally:
+        handle.close()
+
+    assert annotation is not None
+    assert annotation["gene"]["symbol"] == target_symbol
+    assert annotation["consequence"]["most_severe"] == "missense_variant"
+    assert annotation["consequence"]["impact"] == "MODERATE"
+    assert annotation["consequence"]["hgvsc"] == target_hgvsc.replace("%3A", ":").replace(
+        "%3E", ">"
+    )
+    assert len(annotation["consequence"]["all_annotations"]) == 2
+
+
 def test_annotation_is_arrow_typed_and_missing_scores_cast_no_vote(tmp_path: Path) -> None:
     row = _csq_row(
         Allele="G",

@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 - 2026-08-31
 
+- Make primary VEP annotation selection gene-aware. Select one deterministic
+  MANE/canonical representative per gene, then rank genes by the representative
+  consequence so a nearby gene's upstream/downstream APPRIS transcript cannot
+  override a coding consequence. Preserve every transcript in
+  `all_annotations` and keep global `most_severe` independent.
 - Reconcile CNVpytor's four-decimal TSV fractions against full-precision HDF5
   values with an exactly inclusive half-unit decimal boundary. This avoids a
   binary floating-point false mismatch at `0.00005` while values outside the

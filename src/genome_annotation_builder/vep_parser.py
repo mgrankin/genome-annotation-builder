@@ -331,7 +331,7 @@ class VepParser:
                 }
             )
 
-        def selection_key(annotation: dict[str, Any]) -> tuple[Any, ...]:
+        def transcript_selection_key(annotation: dict[str, Any]) -> tuple[Any, ...]:
             if annotation["mane_select"]:
                 transcript_priority = 0
             elif annotation["mane_plus_clinical"]:
@@ -350,7 +350,34 @@ class VepParser:
                 annotation["transcript_id"] or "~",
             )
 
-        selected = min(annotations, key=selection_key)
+        # Transcript quality is meaningful within one gene, but comparing it
+        # globally can make a nearby gene's MANE/APPRIS transcript override a
+        # coding consequence in the gene actually affected by the variant.
+        # First choose one representative transcript per gene, then select the
+        # primary gene by the consequence of those representatives.
+        gene_annotations: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for annotation in annotations:
+            if annotation["gene_id"]:
+                gene_key = ("gene_id", annotation["gene_id"])
+            elif annotation["symbol"]:
+                gene_key = ("symbol", annotation["symbol"])
+            else:
+                gene_key = ("feature", annotation["transcript_id"] or "~")
+            gene_annotations.setdefault(gene_key, []).append(annotation)
+
+        gene_representatives = [
+            min(values, key=transcript_selection_key) for values in gene_annotations.values()
+        ]
+        selected = min(
+            gene_representatives,
+            key=lambda annotation: (
+                _severity(annotation["consequence_terms"]),
+                IMPACT_RANK.get(annotation["impact"], 99),
+                transcript_selection_key(annotation),
+                annotation["gene_id"] or "~",
+                annotation["symbol"] or "~",
+            ),
+        )
         severe_annotation = min(
             annotations,
             key=lambda value: (
