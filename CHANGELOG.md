@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 - 2026-11-26
+
+- Preserve the family VCF producer’s mapping limits at pseudoautosomal regions.
+  Target queries, polygenic scores and PharmCAT now respect those limits across
+  the full reference span of the target. Keep the original read depth, quality
+  and genotype available as supporting data.
+
 ## 0.2.2 - 2026-11-26
 
 - Send concrete ALT alleles observed in partial genotypes through normalization
