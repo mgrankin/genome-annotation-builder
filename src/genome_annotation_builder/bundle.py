@@ -602,6 +602,7 @@ def _inventory_entry(
 def assemble_bundle(
     config: BuildConfig,
     *,
+    run_key: str,
     preflight: dict[str, Any],
     ingest_dir: Path,
     ingest_summary: dict[str, Any],
@@ -2775,6 +2776,7 @@ def assemble_bundle(
             else "not_run"
         )
         resource_provenance: dict[str, Any] = {
+            "build_run_key": run_key,
             "builder_implementation_sha256": preflight["software"]["builder_implementation_sha256"],
             "genome_spec_commit": GENOME_SPEC_COMMIT,
             "schema_sha256": PINNED_UPSTREAM_FILES["schema.json"],

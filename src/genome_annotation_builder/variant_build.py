@@ -118,6 +118,9 @@ def _evaluate_acmg_candidates(config: BuildConfig, normalized_vcf: Path) -> dict
                 sample = record.samples["SAMPLE"]
                 raw_gt = sample.get("GT")
                 gt = tuple(raw_gt) if raw_gt is not None else ()
+                if None in gt and 1 in gt:
+                    # Allele annotations are available separately for an incomplete genotype.
+                    continue
                 if len(gt) not in {1, 2} or any(allele not in {0, 1} for allele in gt):
                     raise InputValidationError("invalid genotype reached ACMG evaluator")
                 dp_value = sample.get("DP")

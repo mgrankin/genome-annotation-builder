@@ -6,6 +6,7 @@ import base64
 import hashlib
 import heapq
 import json
+import math
 import re
 from collections import Counter
 from pathlib import Path
@@ -221,8 +222,13 @@ def _integer_list(value: Any) -> list[int] | None:
 
 
 def _json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
         return [_json_value(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        # VCF permits non-finite floats. Keep their spelling in valid JSON.
+        return str(value)
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -233,7 +239,13 @@ def _json_value(value: Any) -> Any:
 def _canonical_json_text(value: Any) -> str | None:
     if not value:
         return None
-    return json.dumps(_json_value(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        _json_value(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def _encode_text(value: str | None) -> str | None:

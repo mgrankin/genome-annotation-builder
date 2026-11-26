@@ -79,6 +79,14 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
             "schema_commit": config.genome_spec_commit,
             "pipeline_version": PIPELINE_VERSION,
             "builder_implementation_sha256": preflight["software"]["builder_implementation_sha256"],
+            "sample": config.sample,
+            "output_profile": {
+                "agent_exploration": config.agent_exploration_profile,
+                "reference_confidence": config.reference_confidence_extension,
+                "partition_by_chromosome": config.partition_variants_by_chromosome,
+                "include_input_paths": config.include_input_paths,
+                "include_sample_identifier": config.include_sample_identifier,
+            },
             "normalization": config.check_ref,
             "quality": vars(config.quality),
             "vep": {
@@ -144,6 +152,17 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
     runtime_path = run_root / "runtime.json"
 
     if config.bundle_path.exists() and not config.overwrite:
+        manifest_path = config.bundle_path / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise GenomeBuilderError(f"cannot read existing bundle manifest: {exc}") from exc
+        provenance = manifest.get("resource_provenance") if isinstance(manifest, dict) else None
+        if not isinstance(provenance, dict) or provenance.get("build_run_key") != run_key:
+            raise GenomeBuilderError(
+                "existing bundle belongs to a different or unknown build; "
+                "use a new output path or explicitly enable overwrite"
+            )
         validation = validate_bundle(
             config.bundle_path,
             reference_fasta=config.reference_fasta,
@@ -357,6 +376,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
     _runtime(runtime_path, run_key, "assembling_and_validating_bundle", 99)
     validation = assemble_bundle(
         config,
+        run_key=run_key,
         preflight=preflight,
         ingest_dir=ingest_stage,
         ingest_summary=ingest,

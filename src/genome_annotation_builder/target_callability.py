@@ -45,7 +45,7 @@ CATALOG_COLUMNS = (
 )
 EVIDENCE_SCOPES = {"site", "target_panel", "derived_interval"}
 PRECEDENCE_RULE = (
-    "carried_variant>overlapping_no_call>complete_reference_evidence>"
+    "normalized_partial_no_call>carried_variant>overlapping_no_call>complete_reference_evidence>"
     "covering_callable_interval>unknown"
 )
 
@@ -370,6 +370,7 @@ def _build_hit_tables(
     targets: Path,
     variants: Path,
     provenance: Path,
+    partial_variants: Path,
     references: Path,
     regions: Path,
     non_core: Path,
@@ -430,9 +431,30 @@ def _build_hit_tables(
         GROUP BY t.callability_id
         """
     )
+    # A left-aligned partial allele may fall outside its source no-call interval.
+    # Match both coordinates and keep each source record once per target.
+    if partial_variants.exists():
+        _register_parquet(connection, "partial_variants", partial_variants)
+        connection.execute("""
+            CREATE TEMP TABLE normalized_no_calls AS
+            SELECT DISTINCT t.callability_id, p.source_id AS evidence_id
+            FROM targets t JOIN partial_variants p
+              ON p.chrom = t.chrom AND p.pos <= t.end_pos AND p.pos + length(p.ref) - 1 >= t.pos
+        """)
+    else:
+        connection.execute("""
+            CREATE TEMP TABLE normalized_no_calls(callability_id VARCHAR, evidence_id VARCHAR)
+        """)
     connection.execute(
         """
         CREATE TEMP TABLE reference_hits AS
+        WITH hits AS (
+          SELECT t.callability_id, r.evidence_id
+          FROM targets t JOIN reference_evidence r
+            ON t.chrom = r.chrom AND r.start_pos <= t.end_pos AND r.end_pos >= t.pos
+          UNION
+          SELECT callability_id, evidence_id FROM normalized_no_calls
+        )
         SELECT t.callability_id,
                count(*) FILTER (WHERE r.state = 'no_call')::BIGINT AS no_call_count,
                list(r.evidence_id ORDER BY r.evidence_id)
@@ -501,11 +523,9 @@ def _build_hit_tables(
                               WHERE r.state IN ('reference_block','explicit_reference_site')
                                 AND r.start_pos <= t.pos AND r.end_pos >= t.end_pos
                             ) END AS reference_ploidy
-        FROM targets t
-        JOIN reference_evidence r
-          ON t.chrom = r.chrom
-         AND r.start_pos <= t.end_pos
-         AND r.end_pos >= t.pos
+        FROM hits
+        JOIN targets t USING (callability_id)
+        JOIN reference_evidence r USING (evidence_id)
         GROUP BY t.callability_id
         """
     )
@@ -545,7 +565,7 @@ def _resolve(row: dict[str, Any], config: BuildConfig) -> tuple[dict[str, Any], 
     reference_ids = list(row.get("reference_evidence_ids") or [])
     region_ids = list(row.get("region_ids") or [])
 
-    if variant_count or non_core_count:
+    if (variant_count or non_core_count) and not row.get("normalized_no_call"):
         exact = bool(row.get("exact_target_observed")) or (
             row.get("variant_id") is None and variant_count > 0
         )
@@ -687,7 +707,8 @@ def _materialize(
 ) -> Counter[str]:
     cursor = connection.execute(
         """
-        SELECT t.*,
+        SELECT t.*, EXISTS (SELECT 1 FROM normalized_no_calls p
+                             WHERE p.callability_id = t.callability_id) AS normalized_no_call,
                v.variant_hit_count, v.exact_target_observed, v.variants_callable,
                v.variant_confidence, v.variant_depth, v.variant_gq, v.variant_ploidy,
                v.observed_variant_ids, v.observed_variant_source_digests,
@@ -792,6 +813,7 @@ def build_target_callability(
                     targets=targets,
                     variants=variant_dir / "variants.parquet",
                     provenance=variant_dir / "variant_provenance.parquet",
+                    partial_variants=variant_dir / "observed_partial_variants.parquet",
                     references=ingest_dir / "reference_evidence.parquet",
                     regions=ingest_dir / "callable_regions.parquet",
                     non_core=ingest_dir / "non_core_variants.parquet",

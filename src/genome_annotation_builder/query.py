@@ -109,6 +109,7 @@ def _register_views(connection: duckdb.DuckDBPyConnection, root: Path) -> set[st
     views: set[str] = set()
     datasets = {
         "variants": root / "variants.parquet",
+        "observed_partial_variants": root / "extensions" / "observed_partial_variants.parquet",
         "gene_index": root / "gene_index.parquet",
         "callability": root / "callability.parquet",
         "callable_regions": root / "callable_regions.parquet",
@@ -223,6 +224,31 @@ def _variant_projection() -> str:
     """
 
 
+def _partial_variants(
+    connection: duckdb.DuckDBPyConnection,
+    views: set[str],
+    predicate: str,
+    parameters: list[Any],
+    limit: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    if "observed_partial_variants" not in views:
+        return [], False
+    return _bounded(
+        connection,
+        f"""
+        SELECT variant_id, chrom, pos, ref, alt, rsid, gt, phased,
+               gene.symbol AS gene_symbol, consequence.most_severe AS consequence,
+               consequence.hgvsc AS hgvsc, consequence.hgvsp AS hgvsp,
+               source_id, source_alt_index, source_gt
+        FROM observed_partial_variants WHERE {predicate}
+        ORDER BY chrom, pos, ref, alt, source_ordinal, source_alt_index
+        """,
+        parameters,
+        limit,
+        "extensions/observed_partial_variants",
+    )
+
+
 def _parse_locus(term: str) -> tuple[str, int, str | None, str | None]:
     match = LOCUS_PATTERN.fullmatch(term)
     if not match:
@@ -239,9 +265,15 @@ def _callability(
     limit: int,
 ) -> dict[str, Any]:
     if term.lower().startswith("rs"):
+        tables = ["variants"]
+        if "observed_partial_variants" in views:
+            tables.append("observed_partial_variants")
+        hits = " UNION ".join(
+            f"SELECT chrom, pos, ref, alt FROM {table} WHERE lower(rsid) = lower(?)"
+            for table in tables
+        )
         row = connection.execute(
-            "SELECT chrom, pos, ref, alt FROM variants WHERE lower(rsid) = lower(?) LIMIT 2",
-            [term],
+            f"SELECT DISTINCT * FROM ({hits}) LIMIT 2", [term] * len(tables)
         ).fetchall()
         if len(row) != 1 and "target_callability_evidence" in views:
             row = connection.execute(
@@ -274,6 +306,9 @@ def _callability(
         parameters,
         limit,
         "variants",
+    )
+    partial_rows, partial_truncated = _partial_variants(
+        connection, views, predicate, parameters, limit
     )
     evidence_rows: list[dict[str, Any]] = []
     region_rows: list[dict[str, Any]] = []
@@ -356,7 +391,10 @@ def _callability(
     materialized_reason = (
         str(target_evidence_rows[0]["reason"]) if len(target_evidence_rows) == 1 else None
     )
-    if "non_reference_observed" in resolutions:
+    if partial_rows and not variant_rows:
+        conclusion = "partial_non_reference_observed"
+        reason = "the ALT is present in an incomplete genotype; its exact dosage is unknown"
+    elif "non_reference_observed" in resolutions:
         conclusion = "non_reference_observed"
         reason = materialized_reason or "a materialized target has a carried target/site allele"
     elif "overlapping_variant_observed" in resolutions:
@@ -406,6 +444,7 @@ def _callability(
         reason = "no applicable variant, reference, or callability evidence was found"
     rows = [
         *variant_rows,
+        *partial_rows,
         *callability_rows,
         *target_evidence_rows,
         *evidence_rows,
@@ -419,6 +458,7 @@ def _callability(
         "count": len(rows),
         "truncated": (
             variant_truncated
+            or partial_truncated
             or callability_truncated
             or target_evidence_truncated
             or evidence_truncated
@@ -862,6 +902,10 @@ def query_bundle(
                 "variants",
             )
             extra["available_tables"] = sorted(views)
+            if "observed_partial_variants" in views:
+                extra["observed_partial_allele_rows"] = connection.execute(
+                    "SELECT count(*) FROM observed_partial_variants"
+                ).fetchone()[0]
             extra["read_backed_extension_rows"] = {
                 table: connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                 for table in RELEASE_C_VIEWS
@@ -884,18 +928,27 @@ def query_bundle(
                 predicate = """
                     lower(variant_id) LIKE lower(?) OR lower(coalesce(rsid,'')) LIKE lower(?) OR
                     lower(coalesce(gene.symbol,'')) LIKE lower(?) OR
-                    lower(coalesce(pathogenicity.clinvar_id,'')) LIKE lower(?) OR
                     lower(coalesce(consequence.most_severe,'')) LIKE lower(?)
                 """
                 wildcard = f"%{term}%"
-                parameters = [wildcard] * 5
+                parameters = [wildcard] * 4
+            core_predicate = predicate
+            core_parameters = parameters
+            if operation == "search":
+                core_predicate += " OR lower(coalesce(pathogenicity.clinvar_id,'')) LIKE lower(?)"
+                core_parameters = [*parameters, wildcard]
             rows, truncated = _bounded(
                 connection,
-                _variant_projection() + f" WHERE {predicate} ORDER BY chrom, pos, alt",
-                parameters,
+                _variant_projection() + f" WHERE {core_predicate} ORDER BY chrom, pos, alt",
+                core_parameters,
                 limit,
                 "variants",
             )
+            partial, partial_truncated = _partial_variants(
+                connection, views, predicate, parameters, limit - len(rows)
+            )
+            rows.extend(partial)
+            truncated = truncated or partial_truncated
             if operation == "gene":
                 context_rows: list[dict[str, Any]] = []
                 context_truncated = False
@@ -1125,6 +1178,12 @@ def query_bundle(
             else:
                 extra["unavailable"] = "variant provenance extension was not built"
             evidence_queries = [
+                (
+                    "observed_partial_variants",
+                    "SELECT * FROM observed_partial_variants WHERE lower(variant_id) = lower(?) "
+                    "ORDER BY source_ordinal, source_alt_index",
+                    "extensions/observed_partial_variants",
+                ),
                 (
                     "clinical_evidence",
                     "SELECT * FROM clinical_evidence WHERE lower(variant_id) = lower(?) "

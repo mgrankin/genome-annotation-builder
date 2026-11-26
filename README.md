@@ -212,9 +212,11 @@ GAB_CONFIG=config/config.yaml snakemake \
   --use-conda
 ```
 
-The pipeline refuses to overwrite an existing final bundle. It writes to a
-sibling staging directory, validates it, fsyncs metadata, and promotes it with
-an atomic rename.
+A build reuses an existing bundle only when its recorded build key matches the
+current input, implementation, configuration and resources. To rebuild a legacy
+bundle or run with a different configuration, choose a new output path or set
+`output.overwrite` explicitly. The build validates the staged bundle before
+promoting it with an atomic rename.
 
 The example configuration pins the official VEP 116.0 Linux/amd64 container
 by immutable OCI digest. On another architecture, use the matching immutable

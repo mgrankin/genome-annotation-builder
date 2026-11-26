@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2 - 2026-11-26
+
+- Send concrete ALT alleles observed in partial genotypes through normalization
+  and VEP. Variant, gene and evidence queries expose their annotations and source
+  genotypes in `extensions/observed_partial_variants.parquet`. Genotype-dependent
+  analyses continue to require complete calls. Target callability also accounts
+  for the normalized position of partial alleles.
+- Store INFO and extra FORMAT provenance as JSON objects. Earlier bundles can be
+  read and validated independently. Rebuilding in a fresh output location applies
+  the corrected encoding and allele projection from ingest onward.
+- Check the build identity before reusing an existing bundle.
+
 ## 0.2.1 - 2026-08-31
 
 - Make primary VEP annotation selection gene-aware. Select one deterministic
