@@ -17,7 +17,7 @@ or incomplete output reconciliation.
 
 ## Evidence states
 
-The ingestion layer emits disjoint evidence classes:
+The ingestion layer records locus-level genotype evidence and the concrete alleles observed in those genotypes:
 
 - `called_variant`: a concrete A/C/G/T ALT allele carried by the selected
   genotype;
@@ -38,8 +38,24 @@ and no overlapping non-reference/no-call evidence supersedes it.
 
 ## Allele decomposition and normalization
 
-Only concrete ALT alleles present in the selected sample genotype enter
-`variants.parquet`. For each selected ALT, the original genotype is projected
+Concrete ALT alleles present in a complete sample genotype enter
+`variants.parquet`. An incomplete genotype retains its locus-level `no_call`
+and false callability. A concrete ALT explicitly present in its GT also goes
+through the normal normalization and VEP stages. The resulting annotations
+are published in `extensions/observed_partial_variants.parquet`. For example,
+`./2` projects only ALT 2, with GT `[null, 1]`. Unknown slots remain null
+and their position and phase separator are preserved. Neither `0/.` nor
+`./.` contributes an observed ALT, including when native dosage metadata
+is positive.
+
+The extension carries the normalized variant ID, coordinates, REF, ALT,
+nullable GT slots, phase and typed gene and transcript consequences. Its
+original source GT, source ID, digest, ordinal and selected ALT index link
+to the no-call evidence. An allele that decomposes into multiple atoms
+produces one row per atom; the source-allele accounting counts it once.
+These records do not supply a complete dosage to clinical or trait models.
+
+For each selected ALT in a complete genotype, the original genotype is projected
 to a biallelic genotype while preserving allele order and phase: the selected
 allele maps to `1`; reference and other ALT alleles map to `0`. Thus a `1/2`
 call produces two traceable heterozygous rows, while an uncarried ALT produces

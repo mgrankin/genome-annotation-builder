@@ -512,7 +512,7 @@ def ingest_reference_confidence_vcf(
                         isinstance(allele, int) and allele >= 0 for allele in gt
                     )
                     alts = tuple(str(alt).upper() for alt in (record.alts or ()))
-                    if complete and any(int(allele) > len(alts) for allele in gt):
+                    if any(allele is not None and not 0 <= allele <= len(alts) for allele in gt):
                         raise InputValidationError(
                             f"genotype allele index exceeds ALT count at source record {ordinal}"
                         )
@@ -547,6 +547,9 @@ def ingest_reference_confidence_vcf(
                         minimum_depth=config.quality.callable_min_dp,
                     )
 
+                    called_indices = sorted(
+                        {allele for allele in gt if allele is not None and allele > 0}
+                    )
                     if not complete:
                         counters["records_no_call"] += 1
                         evidence_writer.write(
@@ -576,9 +579,18 @@ def ingest_reference_confidence_vcf(
                                 reason="incomplete_or_absent_GT",
                             )
                         )
-                        continue
-
-                    called_indices = sorted({int(allele) for allele in gt if int(allele) > 0})
+                        # Retain the locus-level no-call. Only an explicit, concrete GT
+                        # allele has a partial variant annotation; native FORMAT evidence
+                        # alone cannot select a genotype or a different ALT.
+                        called_indices = [
+                            i
+                            for i in called_indices
+                            if canonical_core_chrom(record.contig)
+                            and _is_concrete(ref)
+                            and _is_concrete(alts[i - 1])
+                        ]
+                        if not called_indices:
+                            continue
                     if not called_indices:
                         symbolic_reference = bool(alts) and all(
                             alt in SYMBOLIC_REFERENCE_ALLELES for alt in alts
@@ -656,7 +668,9 @@ def ingest_reference_confidence_vcf(
                             )
                             continue
 
-                        projected_gt = tuple(1 if int(allele) == alt_index else 0 for allele in gt)
+                        projected_gt = tuple(
+                            None if allele is None else int(allele == alt_index) for allele in gt
+                        )
                         if 1 not in projected_gt:
                             raise InputValidationError(
                                 "internal allele projection lost selected ALT"
@@ -718,6 +732,8 @@ def ingest_reference_confidence_vcf(
                         projected.write(output_record)
                         accepted_evidence_digest.add(evidence_id)
                         counters["called_concrete_alleles_projected"] += 1
+                        if not complete:
+                            counters["observed_partial_source_alleles_projected"] += 1
 
                     uncalled = len(alts) - len(called_indices)
                     if uncalled > 0:

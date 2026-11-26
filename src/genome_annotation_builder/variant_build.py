@@ -29,6 +29,7 @@ from .arrow_schemas import (
     gwas_association_schema,
     gwas_catalog_evidence_schema,
     interpretation_schema,
+    observed_partial_variant_schema,
     variant_provenance_schema,
     variant_schema,
 )
@@ -365,6 +366,7 @@ def build_variant_datasets(
     with atomic_output_directory(destination) as staging:
         variants_path = staging / "variants.parquet"
         provenance_path = staging / "variant_provenance.parquet"
+        partial_path = staging / "observed_partial_variants.parquet"
         counters: Counter[str] = Counter()
         gene_stats: dict[tuple[str, str], dict[str, Any]] = {}
         clinvar_manifest = verify_clinvar(config) if config.clinvar_enabled else None
@@ -411,6 +413,9 @@ def build_variant_datasets(
             with ExitStack() as stack:
                 variant_writer = stack.enter_context(
                     PartitionedParquetWriter(variants_path, variant_schema())
+                )
+                partial_writer = stack.enter_context(
+                    PartitionedParquetWriter(partial_path, observed_partial_variant_schema())
                 )
                 provenance_writer = stack.enter_context(
                     PartitionedParquetWriter(
@@ -513,7 +518,7 @@ def build_variant_datasets(
                     sample = record.samples["SAMPLE"]
                     raw_gt = sample.get("GT")
                     gt = tuple(raw_gt) if raw_gt is not None else ()
-                    if len(gt) not in {1, 2} or any(allele not in {0, 1} for allele in gt):
+                    if len(gt) not in {1, 2} or any(allele not in {None, 0, 1} for allele in gt):
                         raise InputValidationError("invalid projected genotype after normalization")
                     if 1 not in gt:
                         raise InputValidationError(
@@ -539,6 +544,40 @@ def build_variant_datasets(
                         )
 
                     variant_id = f"{chrom}:{record.pos}:{ref}:{alt}"
+                    vep_annotation = vep_parser.parse(record) if config.vep_enabled else None
+                    if config.vep_enabled and vep_annotation is None:
+                        raise InputValidationError(
+                            f"VEP output record has no allele annotation at {record.contig}:{record.pos}"
+                        )
+                    if None in gt:
+                        # Keep allele-level VEP results outside the normative complete-GT
+                        # variants and all genotype-dependent clinical/trait consumers.
+                        partial_writer.write(
+                            {
+                                "variant_id": variant_id,
+                                "chrom": chrom,
+                                "pos": record.pos,
+                                "ref": ref,
+                                "alt": alt,
+                                "rsid": _info_scalar(record, "GAB_RSID")
+                                or (vep_annotation or {}).get("rsid"),
+                                "gt": list(gt),
+                                "phased": bool(sample.phased),
+                                "source_id": source_id,
+                                "source_record_digest": source_digest,
+                                "source_ordinal": source_ordinal,
+                                "source_alt_index": source_alt_index,
+                                "source_chrom": _info_scalar(record, "GAB_ORIG_CONTIG"),
+                                "source_pos": _info_scalar(record, "GAB_ORIG_POS"),
+                                "source_ref": _info_scalar(record, "GAB_ORIG_REF"),
+                                "source_alt": _info_scalar(record, "GAB_ORIG_ALT"),
+                                "source_gt": _info_scalar(record, "GAB_ORIG_GT"),
+                                "gene": (vep_annotation or {}).get("gene", {}),
+                                "consequence": (vep_annotation or {}).get("consequence", {}),
+                            }
+                        )
+                        counters["observed_partial_variant_rows"] += 1
+                        continue
                     locus = (chrom, record.pos)
                     if locus != previous_locus:
                         locus_ids.clear()
@@ -588,11 +627,6 @@ def build_variant_datasets(
                         phased=bool(sample.phased),
                         allele_balance=allele_balance,
                     )
-                    vep_annotation = vep_parser.parse(record) if config.vep_enabled else None
-                    if config.vep_enabled and vep_annotation is None:
-                        raise InputValidationError(
-                            f"VEP output record has no allele annotation at {record.contig}:{record.pos}"
-                        )
                     apply_vep_annotation(row, vep_annotation)
                     if clinvar_lookup is not None:
                         clinvar_records = clinvar_lookup.lookup(chrom, record.pos, ref, alt)
@@ -814,17 +848,27 @@ def build_variant_datasets(
         try:
             provenance_glob = str(provenance_path / "**" / "*.parquet").replace("'", "''")
             variants_glob = str(variants_path / "**" / "*.parquet").replace("'", "''")
-            total_provenance, distinct_sources = connection.execute(
-                "SELECT count(*), count(DISTINCT source_id || ':a' || "
-                "CAST(source_alt_index AS VARCHAR)) "
-                f"FROM read_parquet('{provenance_glob}')"
+            partial_glob = str(partial_path / "**" / "*.parquet").replace("'", "''")
+            total_provenance = connection.execute(
+                f"SELECT count(*) FROM read_parquet('{provenance_glob}')"
+            ).fetchone()[0]
+            partial_rows, distinct_partial = connection.execute(
+                "SELECT count(*), count(DISTINCT (source_id, source_alt_index, variant_id)) "
+                f"FROM read_parquet('{partial_glob}')"
             ).fetchone()
+            if partial_rows != distinct_partial:
+                raise ReconciliationError(
+                    "duplicate normalized partial allele from the same source"
+                )
+
             total_variants, distinct_variants = connection.execute(
                 f"SELECT count(*), count(DISTINCT variant_id) FROM read_parquet('{variants_glob}')"
             ).fetchone()
             source_cursor = connection.execute(
                 "SELECT DISTINCT source_id, source_alt_index "
-                f"FROM read_parquet('{provenance_glob}') ORDER BY source_id, source_alt_index"
+                f"FROM read_parquet('{provenance_glob}') "
+                f"UNION SELECT source_id, source_alt_index FROM read_parquet('{partial_glob}') "
+                "ORDER BY source_id, source_alt_index"
             )
             actual_sources = MultisetDigest()
             while source_rows := source_cursor.fetchmany(100_000):
@@ -862,12 +906,14 @@ def build_variant_datasets(
             "status": "PASS",
             "counters": dict(sorted(counters.items())),
             "source_allele_multiset": actual_multiset,
-            "unique_source_alleles": distinct_sources,
+            "unique_source_alleles": actual_multiset["count"],
+            "observed_partial_variant_rows": partial_rows,
             "unique_normalized_variants": distinct_variants,
             "normalized_variant_rows": total_variants,
             "outputs": {
                 "variants.parquet": directory_digest(variants_path),
                 "variant_provenance.parquet": directory_digest(provenance_path),
+                "observed_partial_variants.parquet": directory_digest(partial_path),
                 **(
                     {"gene_index.parquet": sha256_file(gene_index_path)}
                     if config.vep_enabled

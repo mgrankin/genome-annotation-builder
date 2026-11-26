@@ -1426,3 +1426,124 @@ def test_pgs_never_scores_unresolved_or_other_alt_loci(
     assert result["status"] == expected_status
     assert result["dosage"] is None
     assert result["contribution"] is None
+
+
+def _partial_fixture(tmp_path: Path):
+    config, input_vcf = _environment(tmp_path)
+    plain = tmp_path / "partial.vcf"
+    header = (FIXTURES / "synthetic-reference-confidence.vcf").read_text().split("#CHROM")[0]
+    plain.write_text(
+        header + '##FORMAT=<ID=NDOS,Number=1,Type=Integer,Description="Native dosage">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE_ID\n"
+        "1\t9\t.\tAC\tTG\t60\tPASS\t.\tGT:DP:GQ:NDOS\t1|.:30:60:1\n"
+        "1\t15\t.\tG\tC,A\t60\tPASS\t.\tGT:DP:GQ:NDOS\t./2:30:60:1\n"
+        "1\t19\t.\tG\tA\t60\tPASS\t.\tGT:DP:GQ:NDOS\t1/.:30:60:1\n"
+        "1\t22\t.\tC\tA\t60\tPASS\t.\tGT:DP:GQ:NDOS\t.|1:30:60:1\n"
+        "1\t25\t.\tA\tG\t60\tPASS\t.\tGT:DP:GQ:NDOS\t0/.:30:60:1\n"
+        "1\t30\t.\tC\tT\t60\tPASS\t.\tGT:DP:GQ:NDOS\t./.:30:60:1\n"
+        "1\t32\t.\tT\tG\t60\tPASS\t.\tGT:DP:GQ:NDOS\t.:30:60:1\n"
+    )
+    pysam.tabix_compress(str(plain), str(input_vcf), force=True)
+    pysam.tabix_index(str(input_vcf), preset="vcf", force=True)
+    return config, input_vcf
+
+
+def test_partial_only_bundle_reconciles_source_and_atoms(tmp_path: Path) -> None:
+    config, _ = _partial_fixture(tmp_path)
+    sync_pinned_resources(config)
+    result = build_bundle(config)
+    assert result["validation"]["valid"]
+    bundle = config.bundle_path
+    partial = bundle / "extensions/observed_partial_variants.parquet"
+    with duckdb.connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM read_parquet(?)", [str(bundle / "variants.parquet/**/*.parquet")]
+        ).fetchone() == (0,)
+        data = conn.execute(
+            "SELECT pos, source_gt, gt, phased, source_alt_index FROM read_parquet(?) ORDER BY pos",
+            [str(partial / "**/*.parquet")],
+        ).fetchall()
+        assert data == [
+            (9, "1|.", [1, None], True, 1),
+            (10, "1|.", [1, None], True, 1),
+            (15, "./2", [None, 1], False, 2),
+            (19, "1/.", [1, None], False, 1),
+            (22, ".|1", [None, 1], True, 1),
+        ]
+        assert conn.execute(
+            "SELECT count(*) FROM read_parquet(?) WHERE state='no_call' AND NOT callable AND reference_observed IS NULL",
+            [str(bundle / "extensions/reference_confidence_regions.parquet/**/*.parquet")],
+        ).fetchone() == (7,)
+    reconcile = json.loads((bundle / "extensions/reconciliation.json").read_bytes())
+    assert reconcile["observed_partial_variant_rows"] == 5
+    assert reconcile["unique_source_alleles"] == 4
+    assert reconcile["unique_normalized_variants"] == 0
+
+
+def test_partial_and_complete_sources_can_annotate_the_same_allele(tmp_path: Path) -> None:
+    config, vcf = _partial_fixture(tmp_path)
+    with pysam.VariantFile(str(vcf)) as f:
+        header = str(f.header)
+    plain = tmp_path / "overlap.vcf"
+    plain.write_text(
+        header
+        + "".join(
+            f"1\t19\t.\tG\tA\t60\tPASS\t.\tGT:DP:GQ:NDOS\t{gt}:30:60:1\n"
+            for gt in ("1/.", "./1", "0/1")
+        )
+    )
+    pysam.tabix_compress(str(plain), str(vcf), force=True)
+    pysam.tabix_index(str(vcf), preset="vcf", force=True)
+    sync_pinned_resources(config)
+    assert build_bundle(config)["validation"]["valid"]
+    root = config.bundle_path
+    with duckdb.connect() as db:
+        assert db.execute(
+            "SELECT genotype.gt FROM read_parquet(?)", [str(root / "variants.parquet/**/*.parquet")]
+        ).fetchall() == [([0, 1],)]
+        assert db.execute(
+            "SELECT count(*), count(DISTINCT source_id), count(DISTINCT variant_id) FROM read_parquet(?)",
+            [str(root / "extensions/observed_partial_variants.parquet/**/*.parquet")],
+        ).fetchone() == (2, 2, 1)
+
+
+def test_partial_allele_annotations_consume_normal_vep_csq(tmp_path: Path) -> None:
+    from genome_annotation_builder.vep_parser import PIPELINE_REQUIRED_FIELDS
+
+    config, input_vcf = _partial_fixture(tmp_path)
+    digest = hashlib.sha256(input_vcf.read_bytes()).hexdigest()
+    ingest = ingest_reference_confidence_vcf(config, digest, tmp_path / "ingest")
+    normalize_projected_vcf(config, tmp_path / "ingest/projected.vcf.gz", tmp_path / "norm")
+    annotated = tmp_path / "annotated.vcf.gz"
+    fields = sorted(PIPELINE_REQUIRED_FIELDS)
+    with pysam.VariantFile(str(tmp_path / "norm/normalized.vcf.gz")) as src:
+        hdr = src.header.copy()
+        hdr.info.add("CSQ", ".", "String", "Consequence annotations. Format: " + "|".join(fields))
+        with pysam.VariantFile(str(annotated), "wz", header=hdr) as out:
+            for r in src:
+                r.translate(hdr)
+                csq = {
+                    "ALLELE_NUM": "1",
+                    "Allele": r.alts[0],
+                    "SYMBOL": "CONTROL",
+                    "Consequence": "missense_variant",
+                    "IMPACT": "MODERATE",
+                    "Feature_type": "Transcript",
+                    "Feature": "ENST000001",
+                }
+                r.info["CSQ"] = ("|".join(csq.get(k, "") for k in fields),)
+                out.write(r)
+    built = build_variant_datasets(
+        replace(config, vep_enabled=True),
+        annotated,
+        digest,
+        ingest["accepted_evidence_multiset"],
+        tmp_path / "build",
+    )
+    assert built["observed_partial_variant_rows"] == 5
+    path = tmp_path / "build/observed_partial_variants.parquet/**/*.parquet"
+    with duckdb.connect() as conn:
+        assert conn.execute(
+            "SELECT DISTINCT gene.symbol, consequence.most_severe, len(consequence.all_annotations) FROM read_parquet(?)",
+            [str(path)],
+        ).fetchall() == [("CONTROL", "missense_variant", 1)]

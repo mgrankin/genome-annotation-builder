@@ -47,26 +47,28 @@ def _run(command: list[str], environment: dict[str, str]) -> dict[str, Any]:
     return result
 
 
-def _complete_gt(value: Any, field: str) -> tuple[tuple[int, ...], bool]:
+def _allele_gt(value: Any, field: str) -> tuple[tuple[int | None, ...], bool]:
     text = str(value)
     if not text or text == "." or ("/" in text and "|" in text):
         raise InputValidationError(f"invalid {field} genotype provenance")
     separator = "|" if "|" in text else "/" if "/" in text else None
     tokens = text.split(separator) if separator is not None else [text]
-    if len(tokens) not in {1, 2} or any(not token.isdigit() for token in tokens):
+    if len(tokens) not in {1, 2} or any(token != "." and not token.isdigit() for token in tokens):
         raise InputValidationError(f"invalid {field} genotype provenance")
-    genotype = tuple(int(token) for token in tokens)
+    genotype = tuple(None if token == "." else int(token) for token in tokens)
     return genotype, separator == "|"
 
 
-def _projected_genotype(record: pysam.VariantRecord) -> tuple[tuple[int, ...], bool]:
-    source_gt, source_phased = _complete_gt(record.info.get("GAB_ORIG_GT"), "source")
-    projected_gt, projected_phased = _complete_gt(record.info.get("GAB_PROJECTED_GT"), "projected")
+def _projected_genotype(record: pysam.VariantRecord) -> tuple[tuple[int | None, ...], bool]:
+    source_gt, source_phased = _allele_gt(record.info.get("GAB_ORIG_GT"), "source")
+    projected_gt, projected_phased = _allele_gt(record.info.get("GAB_PROJECTED_GT"), "projected")
     try:
         source_alt_index = int(record.info["GAB_ALT_INDEX"])
     except (KeyError, TypeError, ValueError) as exc:
         raise InputValidationError("invalid selected ALT provenance during normalization") from exc
-    expected = tuple(1 if allele == source_alt_index else 0 for allele in source_gt)
+    expected = tuple(
+        None if allele is None else int(allele == source_alt_index) for allele in source_gt
+    )
     if source_alt_index < 1 or 1 not in expected:
         raise InputValidationError("selected ALT is absent from source genotype provenance")
     if projected_gt != expected or projected_phased != source_phased:
@@ -164,7 +166,7 @@ def _validate_canonical_order(path: Path) -> dict[str, Any]:
 
         previous_locus: tuple[int, int] | None = None
         current_locus: tuple[int, int] | None = None
-        seen_alleles: set[tuple[str, str]] = set()
+        seen_alleles: set[tuple[str, str, str | None, int | None]] = set()
         records = 0
         first_locus: str | None = None
         last_locus: str | None = None
@@ -190,7 +192,15 @@ def _validate_canonical_order(path: Path) -> dict[str, Any]:
             if locus != current_locus:
                 current_locus = locus
                 seen_alleles.clear()
-            allele = ref, alt
+            # Distinct partial sources can yield the same normalized atom. Core
+            # allele merge joins still require a single complete call per allele.
+            partial = None in record.samples["SAMPLE"]["GT"]
+            allele = (
+                ref,
+                alt,
+                record.info.get("GAB_SOURCE_ID") if partial else None,
+                record.info.get("GAB_ALT_INDEX") if partial else None,
+            )
             if allele in seen_alleles:
                 raise InputValidationError(
                     "duplicate normalized query allele would violate streaming merge joins"
@@ -242,13 +252,15 @@ def _biallelicize_atomized_bcf(source_path: Path, destination: Path) -> dict[str
                 raw_gt_value = sample.get("GT")
                 raw_gt = tuple(raw_gt_value) if raw_gt_value is not None else ()
                 if len(raw_gt) != len(projected_gt) or any(
-                    allele is None or int(allele) < 0 or int(allele) >= len(record.alleles)
+                    allele is not None and not 0 <= allele < len(record.alleles)
                     for allele in raw_gt
                 ):
                     raise InputValidationError(
                         f"invalid atomized GT at {record.contig}:{record.pos}"
                     )
-                semantic_gt = tuple(1 if int(allele) > 0 else 0 for allele in raw_gt)
+                semantic_gt = tuple(
+                    None if allele is None else int(allele > 0) for allele in raw_gt
+                )
                 phase_disagrees = len(projected_gt) == 2 and bool(sample.phased) != projected_phased
                 if semantic_gt != projected_gt or phase_disagrees:
                     raise InputValidationError(

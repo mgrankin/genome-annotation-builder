@@ -30,6 +30,7 @@ from .arrow_schemas import (
     gwas_catalog_evidence_schema,
     interpretation_schema,
     non_core_variant_schema,
+    observed_partial_variant_schema,
     pgs_locus_audit_schema,
     pgs_model_audit_schema,
     pgx_gene_call_audit_schema,
@@ -1136,12 +1137,13 @@ def _validate_provenance(
     errors: list[str],
 ) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
-    if "variant_provenance" not in {
+    views = {
         row[0]
         for row in connection.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_type='VIEW'"
         ).fetchall()
-    }:
+    }
+    if "variant_provenance" not in views:
         errors.append("variant provenance extension is missing")
         return metrics
     total, distinct_variants, bad_digest, bad_source = connection.execute(
@@ -1171,10 +1173,33 @@ def _validate_provenance(
     if bad_digest or bad_source:
         errors.append("variant provenance contains invalid source identifiers")
 
-    cursor = connection.execute(
-        "SELECT DISTINCT source_id, source_alt_index FROM variant_provenance "
-        "ORDER BY source_id, source_alt_index"
-    )
+    sources_sql = "SELECT DISTINCT source_id, source_alt_index FROM variant_provenance"
+    partial_rows = 0
+    if "observed_partial_variants" in views:
+        partial_rows, distinct_partial, bad_partial = connection.execute("""
+            SELECT count(*), count(DISTINCT (p.source_id, p.source_alt_index, p.variant_id)),
+              count(*) FILTER (WHERE
+                r.evidence_id IS NULL OR r.reference_observed IS NOT NULL
+                OR r.callable IS DISTINCT FROM false OR p.source_ordinal != r.source_ordinal
+                OR p.source_record_digest != r.source_record_digest OR p.source_pos != r.start_pos
+                OR p.source_alt_index NOT BETWEEN 1 AND len(r.source_alts)
+                OR p.source_alt IS DISTINCT FROM r.source_alts[p.source_alt_index]
+                OR p.phased IS DISTINCT FROM r.phased
+                OR len(p.gt) != 2 OR list_count(p.gt) != 1 OR NOT list_contains(p.gt,1)
+                OR p.gt IS DISTINCT FROM list_transform(r.gt, a -> CASE WHEN a IS NULL THEN NULL ELSE (a=p.source_alt_index)::TINYINT END)
+                OR contains(p.source_gt, '|') IS DISTINCT FROM r.phased
+                OR replace(p.source_gt,'|','/') IS DISTINCT FROM array_to_string(
+                    list_transform(r.gt, a -> coalesce(a::VARCHAR,'.')), '/')
+                OR p.variant_id != concat(p.chrom,':',p.pos,':',p.ref,':',p.alt))
+            FROM observed_partial_variants p
+            LEFT JOIN reference_evidence r ON r.evidence_id=p.source_id AND r.state='no_call'
+        """).fetchone()
+        if distinct_partial != partial_rows or bad_partial:
+            errors.append(
+                "observed partial alleles differ from source no-call evidence or repeat a projection"
+            )
+        sources_sql += " UNION SELECT source_id, source_alt_index FROM observed_partial_variants"
+    cursor = connection.execute(sources_sql + " ORDER BY source_id, source_alt_index")
     multiset = MultisetDigest()
     while batch := cursor.fetchmany(100_000):
         for source_id, source_alt_index in batch:
@@ -1194,6 +1219,8 @@ def _validate_provenance(
         errors.append("reconciliation unique-source count mismatch")
     if reconciliation.get("unique_normalized_variants") != variants:
         errors.append("reconciliation normalized-variant count mismatch")
+    if reconciliation.get("observed_partial_variant_rows", 0) != partial_rows:
+        errors.append("reconciliation observed partial variant count mismatch")
     if reconciliation.get("missing_to_reference_conversions") != 0:
         errors.append("reconciliation reports a missing-to-reference conversion")
     metrics.update(
@@ -3276,6 +3303,7 @@ def _register_views(connection: duckdb.DuckDBPyConnection, root: Path) -> set[st
         "variant_provenance": root / "extensions" / "variant_provenance.parquet",
         "reference_evidence": root / "extensions" / "reference_confidence_regions.parquet",
         "non_core_variants": root / "extensions" / "non_core_variants.parquet",
+        "observed_partial_variants": root / "extensions" / "observed_partial_variants.parquet",
         "target_callability_evidence": (
             root / "extensions" / "target_callability_evidence.parquet"
         ),
@@ -3485,6 +3513,10 @@ def validate_bundle(
             root / "extensions" / "reference_confidence_regions.parquet",
             reference_evidence_schema(),
         ),
+        "observed_partial_variants": (
+            root / "extensions" / "observed_partial_variants.parquet",
+            observed_partial_variant_schema(),
+        ),
         "non_core_variants": (
             root / "extensions" / "non_core_variants.parquet",
             non_core_variant_schema(),
@@ -3632,6 +3664,10 @@ def validate_bundle(
         if extension_specs["reference_confidence_regions"][0].exists():
             expected_fields |= _field_paths(
                 "reference_confidence_regions", reference_evidence_schema()
+            )
+        if extension_specs["observed_partial_variants"][0].exists():
+            expected_fields |= _field_paths(
+                "observed_partial_variants", observed_partial_variant_schema()
             )
         if extension_specs["non_core_variants"][0].exists():
             expected_fields |= _field_paths("non_core_variants", non_core_variant_schema())

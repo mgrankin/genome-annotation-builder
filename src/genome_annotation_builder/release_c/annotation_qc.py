@@ -656,7 +656,16 @@ def collect_bundle_annotation_qc(
             ("records.accepted_source_alleles", accepted_count),
             ("records.normalized_output_alleles", normalized_count),
             ("records.output_variant_rows", total),
-            ("records.one_to_many_extra_rows", total - normalized_count),
+            (
+                "records.observed_partial_variant_rows",
+                int(reconciliation.get("observed_partial_variant_rows", 0)),
+            ),
+            (
+                "records.one_to_many_extra_rows",
+                total
+                + int(reconciliation.get("observed_partial_variant_rows", 0))
+                - normalized_count,
+            ),
             ("records.non_core_variant_rows", int(reconciliation.get("non_core_variant_rows", 0))),
             ("records.missing_to_reference_conversions", missing_to_reference),
         ):

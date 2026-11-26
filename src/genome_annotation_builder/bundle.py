@@ -357,7 +357,7 @@ def _glossary_entry(
             "documented aggregation backed by clinical_evidence.parquet and "
             "extensions/clinvar_assertions.parquet"
         )
-    elif table == "variants" and config.vep_enabled and vep_field:
+    elif table in {"variants", "observed_partial_variants"} and config.vep_enabled and vep_field:
         evidence_class = "external_annotation"
         observed_or_inferred = "inferred"
         source = "checksum-pinned offline Ensembl VEP/cache declared in manifest.json"
@@ -388,6 +388,13 @@ def _glossary_entry(
         observed_or_inferred = "inferred"
         source = "reference-confidence VCF record metrics"
         derivation = "configured FILTER/FT/DP/GQ thresholds"
+    elif table == "observed_partial_variants" and (
+        first.startswith("source_") or first in {"gt", "phased"}
+    ):
+        evidence_class = "observed"
+        observed_or_inferred = "observed"
+        source = "immutable incomplete source genotype"
+        derivation = "known selected ALT with original missing slot and phasing preserved"
     elif table in {"variant_provenance", "reference_confidence_regions", "non_core_variants"}:
         evidence_class = "observed"
         observed_or_inferred = "observed"
@@ -787,6 +794,10 @@ def assemble_bundle(
             ingest_dir / "reference_evidence.parquet",
             extensions / "reference_confidence_regions.parquet",
         )
+        partial_name = "observed_partial_variants.parquet"
+        partial_rows = variant_summary.get("observed_partial_variant_rows", 0)
+        if partial_rows:
+            _copy_tree(variant_dir / partial_name, extensions / partial_name)
         non_core_rows = _parquet_rows(ingest_dir / "non_core_variants.parquet")
         if non_core_rows:
             _copy_tree(
@@ -801,6 +812,7 @@ def assemble_bundle(
             "unique_source_alleles": variant_summary["unique_source_alleles"],
             "unique_normalized_variants": variant_summary["unique_normalized_variants"],
             "non_core_variant_rows": non_core_rows,
+            "observed_partial_variant_rows": partial_rows,
             "source_record_counts": ingest_summary["counters"],
             "missing_to_reference_conversions": 0,
         }
@@ -864,6 +876,8 @@ def assemble_bundle(
             table_paths["clingen_dosage_sensitivity"] = (
                 extensions / "clingen_dosage_sensitivity.parquet"
             )
+        if partial_rows:
+            table_paths["observed_partial_variants"] = extensions / partial_name
         if non_core_rows:
             table_paths["non_core_variants"] = extensions / "non_core_variants.parquet"
         glossary_fields: dict[str, dict[str, Any]] = {}
@@ -2398,6 +2412,8 @@ def assemble_bundle(
             asset_rows["extensions/clingen_dosage_sensitivity.parquet"] = _parquet_rows(
                 extensions / "clingen_dosage_sensitivity.parquet"
             )
+        if partial_rows:
+            asset_rows["extensions/" + partial_name] = partial_rows
         if non_core_rows:
             asset_rows["extensions/non_core_variants.parquet"] = non_core_rows
         inventory_specs = [
@@ -2659,6 +2675,16 @@ def assemble_bundle(
                     "ClinGen gene-level dosage-sensitivity context",
                     False,
                     "authoritative_data",
+                )
+            )
+        if partial_rows:
+            inventory_specs.append(
+                (
+                    "extensions/" + partial_name,
+                    "application/vnd.apache.parquet",
+                    "observed concrete alleles with incomplete genotypes and transcript consequences",
+                    False,
+                    "derived_data",
                 )
             )
         if non_core_rows:

@@ -232,6 +232,35 @@ def reference_evidence_schema() -> pa.Schema:
     )
 
 
+def observed_partial_variant_schema() -> pa.Schema:
+    """One observed, normalized allele per partial source projection."""
+    core = variant_schema()
+    provenance = variant_provenance_schema()
+    return pa.schema(
+        [
+            *(core.field(k) for k in ("variant_id", "chrom", "pos", "ref", "alt", "rsid")),
+            pa.field("gt", pa.list_(pa.int8()), nullable=False),
+            pa.field("phased", pa.bool_(), nullable=False),
+            *(
+                provenance.field(k)
+                for k in (
+                    "source_id",
+                    "source_record_digest",
+                    "source_ordinal",
+                    "source_alt_index",
+                    "source_chrom",
+                    "source_pos",
+                    "source_ref",
+                    "source_alt",
+                    "source_gt",
+                )
+            ),
+            core.field("gene"),
+            core.field("consequence"),
+        ]
+    )
+
+
 def non_core_variant_schema() -> pa.Schema:
     return pa.schema(
         [
