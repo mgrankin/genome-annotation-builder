@@ -157,6 +157,14 @@ def _resolve_pgx_locus(rows: list[dict[str, Any]]) -> dict[str, Any]:
             observed_ploidy=ploidy_hint,
         )
 
+    if "mapping_scope_unassessed" in resolutions:
+        return _no_call(
+            base,
+            status="no_call_unknown",
+            reason="the source mapping profile does not assess this target",
+            observed_ploidy=ploidy_hint,
+        )
+
     unexpected = sorted(set(observed_variant_ids) - official_variant_ids)
     if unexpected:
         return _no_call(

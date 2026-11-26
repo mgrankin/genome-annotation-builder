@@ -44,6 +44,8 @@ Use this guide only for the bundle containing it.
    symbols, and related identifiers after an empty retrieval.
 5. Before any absence statement, run `callability` for the exact locus. Only
    `reference_observed` supports a threshold-qualified reference statement.
+   Apply the callability query to the whole allele. A producer-declared PAR limit
+   can yield unknown even when source evidence records a passing reference GT.
    `overlapping_variant_observed`, `callable_without_explicit_reference`,
    `unknown_uncallable`, `unknown_no_call`, and `unknown` do not.
 6. Keep observed genotype, pipeline-derived values, external annotations,

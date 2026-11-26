@@ -645,6 +645,12 @@ def _resolve_locus(row: dict[str, Any]) -> dict[str, Any]:
             f"PGS target evidence is missing for {row['pgs_id']} row {row['scoring_row_number']}"
         )
     resolution = row.get("resolution")
+    if resolution == "mapping_scope_unassessed":
+        return {
+            **base,
+            "status": "missing_unknown",
+            "reason": "the source mapping profile does not assess this target",
+        }
     if resolution == "non_reference_observed":
         observed_ids = list(row.get("observed_variant_ids") or [])
         if observed_ids != [row["variant_id"]]:

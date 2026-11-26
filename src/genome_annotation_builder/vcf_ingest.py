@@ -22,6 +22,7 @@ from .arrow_schemas import (
 from .config import BuildConfig
 from .constants import SYMBOLIC_REFERENCE_ALLELES
 from .errors import InputValidationError
+from .par_scope import source_par_scope
 from .parquet_io import PartitionedParquetWriter
 from .util import (
     MultisetDigest,
@@ -446,6 +447,9 @@ def ingest_reference_confidence_vcf(
         accepted_evidence_digest = MultisetDigest()
 
         try:
+            par_scope = source_par_scope(
+                source.header, reference_sha256=config.reference_expected_sha256
+            )
             with (
                 PartitionedParquetWriter(
                     reference_path, reference_evidence_schema(), partition_field=None
@@ -754,6 +758,7 @@ def ingest_reference_confidence_vcf(
             raise InputValidationError(f"failed to index projected VCF: {exc}") from exc
 
         summary = {
+            "family_par_query_scope": par_scope,
             "status": "PASS",
             "input_sha256": input_sha256,
             "input_basename": config.input_vcf.name,

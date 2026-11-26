@@ -24,6 +24,32 @@ catalogue row digest, every selected evidence identifier, observed ploidy,
 DP/GQ thresholds, and the resolution reason. A different carried ALT or a
 symbolic event overlapping the target is not an explicit reference result.
 
+## Family VCF pseudoautosomal query limits
+
+The family producer can declare its X/Y pseudoautosomal regions with
+`##family_reference_confidence_par_query`. The bundle retains the intervals in
+zero-based, half-open coordinates under `family_par_query_scope` in
+`extensions/reconciliation.json`, including the declared reference, mapping
+and BED digests when present. Portable callability queries and materialized
+targets intersect the entire requested REF span with those intervals.
+
+For the GRCh38 Y-PAR-hardmasked profile, observed X-PAR alleles refer to the
+combined homologues. A passing X-PAR reference observation yields an unknown
+absence result. Every Y-PAR callability query yields unknown, including a
+source-reported ALT. Unmasked PAR limits preserve observed ALTs on both
+chromosomes and withhold negative conclusions. Affected targets carry
+`mapping_scope_unassessed`. Their underlying variant or reference evidence
+remains inspectable, including source GT, depth, GQ and proof identifiers.
+PharmCAT receives no inferred genotype and PGS leaves the dosage missing for
+these targets. Variant, gene and evidence queries display the intersecting source
+scope alongside raw allele annotations. A source-reported Y-PAR observation on
+the masked profile is explicitly labelled as having unassessed chromosome localization.
+
+Legacy family products with a reference-confidence overlay, family ploidy
+normalization or family confidence-policy header and a compatible GRCh38 X/Y dictionary receive a
+coordinate-only PAR limit on negative queries. Generic VCFs without these
+producer declarations retain their original scope.
+
 Polygenic scoring is a consumer of this same proof, not a shortcut around it.
 Only `non_reference_observed` for the exact target allele or a passing
 `reference_observed` state can produce a dosage. The following states always

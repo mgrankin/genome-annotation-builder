@@ -814,6 +814,7 @@ def assemble_bundle(
             "non_core_variant_rows": non_core_rows,
             "observed_partial_variant_rows": partial_rows,
             "source_record_counts": ingest_summary["counters"],
+            "family_par_query_scope": ingest_summary.get("family_par_query_scope", []),
             "missing_to_reference_conversions": 0,
         }
         atomic_write_json(extensions / "reconciliation.json", reconciliation)

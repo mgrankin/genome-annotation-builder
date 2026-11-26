@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import sys
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -258,11 +259,29 @@ def _parse_locus(term: str) -> tuple[str, int, str | None, str | None]:
     return chrom, int(match.group(2)), match.group(3), match.group(4)
 
 
+def bundle_par_scope(bundle: Path) -> list[dict[str, Any]]:
+    reconciliation = bundle / "extensions" / "reconciliation.json"
+    if not reconciliation.is_file():
+        return []
+    return json.loads(reconciliation.read_bytes()).get("family_par_query_scope", [])
+
+
+def par_query_limit(
+    scopes: Sequence[dict[str, Any]], chrom: str, pos: int, end_pos: int
+) -> dict[str, Any] | None:
+    """Intersect the full 1-based inclusive event with producer-declared BED intervals."""
+    for region in scopes:
+        if region["chrom"] == chrom and region["start0"] < end_pos and region["end0"] >= pos:
+            return region
+    return None
+
+
 def _callability(
     connection: duckdb.DuckDBPyConnection,
     views: set[str],
     term: str,
     limit: int,
+    par_scope: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if term.lower().startswith("rs"):
         tables = ["variants"]
@@ -310,9 +329,10 @@ def _callability(
     partial_rows, partial_truncated = _partial_variants(
         connection, views, predicate, parameters, limit
     )
+    end_pos = pos + len(ref or "N") - 1
+    limitation = par_query_limit(par_scope, chrom, pos, end_pos)
     exact_partial = bool(partial_rows)
     if not exact_partial and "observed_partial_variants" in views:
-        end_pos = pos + len(ref or "N") - 1
         partial_rows, partial_truncated = _partial_variants(
             connection,
             views,
@@ -376,9 +396,10 @@ def _callability(
                    ploidy, gt, dp, minimum_dp, gq, reason
             FROM reference_evidence
             WHERE chrom = ? AND start_pos <= ? AND end_pos >= ?
+              AND (state = 'no_call' OR (start_pos <= ? AND end_pos >= ?))
             ORDER BY start_pos, end_pos, evidence_id
             """,
-            [chrom, pos, pos],
+            [chrom, end_pos, pos, pos, end_pos],
             limit,
             "extensions/reference_confidence_regions",
         )
@@ -392,7 +413,7 @@ def _callability(
             WHERE chrom = ? AND start_pos <= ? AND end_pos >= ?
             ORDER BY start_pos, end_pos, region_id
             """,
-            [chrom, pos, pos],
+            [chrom, pos, end_pos],
             limit,
             "callable_regions",
         )
@@ -432,7 +453,7 @@ def _callability(
         reason = (
             materialized_reason or "interval callability does not establish a reference genotype"
         )
-    elif target_evidence_rows:
+    elif target_evidence_rows and resolutions - {"mapping_scope_unassessed"}:
         conclusion = "unknown"
         reason = (
             materialized_reason or "the materialized target has no applicable genotype evidence"
@@ -457,9 +478,36 @@ def _callability(
     else:
         conclusion = "unknown"
         reason = "no applicable variant, reference, or callability evidence was found"
+    overlapping_rows = []
+    overlapping_truncated = False
+    if limitation and limitation["scope"] == "negative" and not (variant_rows or exact_partial):
+        overlapping_rows, overlapping_truncated = _bounded(
+            connection,
+            _variant_projection()
+            + " WHERE chrom = ? AND pos <= ? AND pos + length(ref) - 1 >= ? ORDER BY variant_id",
+            [chrom, end_pos, pos],
+            limit,
+            "variants",
+        )
+        if overlapping_rows or partial_rows:
+            conclusion = "overlapping_variant_observed"
+            reason = (
+                "a different observed ALT overlaps the target and requires haplotype interpretation"
+            )
+    if limitation and (
+        limitation["scope"] == "all"
+        or conclusion
+        not in {
+            "non_reference_observed",
+            "partial_non_reference_observed",
+            "overlapping_variant_observed",
+        }
+    ):
+        conclusion, reason = "unknown", limitation["reason"]
     rows = [
         *variant_rows,
         *partial_rows,
+        *overlapping_rows,
         *callability_rows,
         *target_evidence_rows,
         *evidence_rows,
@@ -467,6 +515,7 @@ def _callability(
     ]
     return {
         "query_locus": {"chrom": chrom, "pos": pos, "ref": ref, "alt": alt},
+        **({"family_mapping_scope": limitation} if limitation else {}),
         "conclusion": conclusion,
         "reason": reason,
         "rows": rows,
@@ -475,6 +524,7 @@ def _callability(
             variant_truncated
             or partial_truncated
             or callability_truncated
+            or overlapping_truncated
             or target_evidence_truncated
             or evidence_truncated
             or region_truncated
@@ -894,6 +944,7 @@ def query_bundle(
     validation = validate_integrity(bundle)
     root = Path(bundle).expanduser().resolve()
     manifest = validation.pop("manifest")
+    scopes = bundle_par_scope(root)
     connection = duckdb.connect(":memory:", read_only=False)
     try:
         views = _register_views(connection, root)
@@ -1161,7 +1212,7 @@ def query_bundle(
         elif operation == "callability":
             if not term:
                 raise ValueError("callability requires chrN:pos[:REF:ALT] or rsID")
-            extra.update(_callability(connection, views, term, limit))
+            extra.update(_callability(connection, views, term, limit, scopes))
             rows = extra.pop("rows")
             truncated = extra.pop("truncated")
         elif operation == "read-backed":
@@ -1274,6 +1325,19 @@ def query_bundle(
     finally:
         connection.close()
 
+    if scopes and operation in {"variant", "gene", "search", "evidence", "clinical", "gwas"}:
+        for row in rows:
+            variant_id = row.get("variant_id")
+            if not isinstance(variant_id, str) or not LOCUS_PATTERN.fullmatch(variant_id):
+                continue
+            chrom, start, ref, _ = _parse_locus(variant_id)
+            limit_info = par_query_limit(scopes, chrom, start, start + len(ref or "N") - 1)
+            if limit_info:
+                row["family_mapping_scope"] = limit_info
+                if limit_info["scope"] == "all":
+                    row["chromosome_localization"] = "unassessed_source_observation"
+                elif limit_info["profile"] == "GRCh38-Ensembl-Y-PAR-hardmask":
+                    row["chromosome_localization"] = "combined_homologs_on_X"
     return {
         "operation": operation,
         "term": term,

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import sqlite3
 import subprocess
 import tempfile
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,7 @@ from .arrow_schemas import (
 from .config import BuildConfig
 from .errors import InputValidationError
 from .parquet_io import PartitionedParquetWriter
+from .query import par_query_limit
 from .util import (
     atomic_output_directory,
     atomic_write_json,
@@ -552,7 +555,9 @@ def _minimum_complete(left: int | None, right: int | None) -> int | None:
     return min(left, right)
 
 
-def _resolve(row: dict[str, Any], config: BuildConfig) -> tuple[dict[str, Any], dict[str, Any]]:
+def _resolve(
+    row: dict[str, Any], config: BuildConfig, par_scope: Sequence[dict[str, Any]] = ()
+) -> tuple[dict[str, Any], dict[str, Any]]:
     variant_count = int(row.get("variant_hit_count") or 0)
     non_core_count = int(row.get("non_core_hit_count") or 0)
     no_call_count = int(row.get("no_call_count") or 0)
@@ -647,6 +652,20 @@ def _resolve(row: dict[str, Any], config: BuildConfig) -> tuple[dict[str, Any], 
         depth = gq = ploidy = None
         reason = "no carried allele, no-call, complete reference, or covering interval was retained"
 
+    limit = par_query_limit(par_scope, row["chrom"], row["pos"], row["end_pos"])
+    if limit and (
+        limit["scope"] == "all"
+        or resolution
+        not in {
+            "non_reference_observed",
+            "overlapping_variant_observed",
+        }
+    ):
+        resolution = "mapping_scope_unassessed"
+        reference_observed = confidence = None
+        callable_value = False
+        reason = limit["reason"]
+
     core = {
         "callability_id": row["callability_id"],
         "variant_id": row.get("variant_id"),
@@ -704,6 +723,7 @@ def _materialize(
     connection: duckdb.DuckDBPyConnection,
     core_path: Path,
     extension_path: Path,
+    par_scope: list[dict[str, Any]],
 ) -> Counter[str]:
     cursor = connection.execute(
         """
@@ -753,7 +773,9 @@ def _materialize(
             core_rows: list[dict[str, Any]] = []
             extension_rows: list[dict[str, Any]] = []
             for values in batch:
-                resolved, evidence = _resolve(dict(zip(names, values, strict=True)), config)
+                resolved, evidence = _resolve(
+                    dict(zip(names, values, strict=True)), config, par_scope
+                )
                 core_rows.append(resolved)
                 extension_rows.append(evidence)
                 counts[evidence["resolution"]] += 1
@@ -820,7 +842,9 @@ def build_target_callability(
                 )
                 core_path = staging / "callability.parquet"
                 extension_path = staging / "target_callability_evidence.parquet"
-                counts = _materialize(config, connection, core_path, extension_path)
+                ingest = json.loads((ingest_dir / "ingest_summary.json").read_bytes())
+                scopes = ingest.get("family_par_query_scope", [])
+                counts = _materialize(config, connection, core_path, extension_path, scopes)
             finally:
                 connection.close()
 

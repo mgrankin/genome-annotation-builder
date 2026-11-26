@@ -66,7 +66,7 @@ from .predictor_doctor import (
     CONTROL_VARIANTS,
 )
 from .predictor_doctor import SEMANTIC_BOUNDARY as PREDICTOR_DOCTOR_SEMANTIC_BOUNDARY
-from .query import query_bundle
+from .query import bundle_par_scope, query_bundle
 from .release_c.extension_stage import validate_release_c_extension_stage
 from .release_c.portable_model import DOMAINS as RELEASE_C_DOMAINS
 from .release_c.portable_model import PortableEvidenceError
@@ -927,6 +927,7 @@ def _validate_target_callability(
     views: set[str],
     manifest: dict[str, Any],
     errors: list[str],
+    scopes: list[dict[str, Any]],
 ) -> dict[str, int]:
     has_core = "callability" in views
     has_extension = "target_callability_evidence" in views
@@ -977,7 +978,7 @@ def _validate_target_callability(
                count(*) FILTER (WHERE resolution NOT IN (
                  'non_reference_observed','overlapping_variant_observed','no_call',
                  'reference_observed','low_confidence_reference',
-                 'callable_without_reference','uncallable_without_reference','unknown'))
+                 'callable_without_reference','uncallable_without_reference','mapping_scope_unassessed','unknown'))
                  AS bad_resolution,
                count(*) FILTER (WHERE observed_ploidy IS NOT NULL AND
                                       observed_ploidy NOT IN (1,2)) AS bad_ploidy,
@@ -1009,6 +1010,8 @@ def _validate_target_callability(
                  resolution = 'uncallable_without_reference' AND
                    (reference_observed IS NOT NULL OR callable IS DISTINCT FROM false OR
                     list_count(callable_region_ids) = 0) OR
+                 resolution = 'mapping_scope_unassessed' AND
+                   (reference_observed IS NOT NULL OR callable IS DISTINCT FROM false OR call_confidence IS NOT NULL) OR
                  resolution = 'unknown' AND
                    (reference_observed IS NOT NULL OR callable IS NOT NULL OR
                     list_count(observed_variant_ids) +
@@ -1059,6 +1062,31 @@ def _validate_target_callability(
     metrics["target_core_extension_mismatches"] = int(mismatch)
     if mismatch:
         errors.append(f"callability core/extension mismatch for {mismatch} row(s)")
+
+    connection.execute(
+        "CREATE TEMP TABLE query_limits(chrom VARCHAR, start0 BIGINT, end0 BIGINT, scope VARCHAR, reason VARCHAR)"
+    )
+    if scopes:
+        connection.executemany(
+            "INSERT INTO query_limits VALUES (?, ?, ?, ?, ?)",
+            [(r["chrom"], r["start0"], r["end0"], r["scope"], r["reason"]) for r in scopes],
+        )
+    scope_mismatches = connection.execute("""
+        SELECT count(*) FROM target_callability_evidence t WHERE
+          (resolution = 'mapping_scope_unassessed' AND NOT EXISTS (
+            SELECT 1 FROM query_limits p WHERE p.chrom=t.chrom AND p.start0<t.end_pos
+            AND p.end0>=t.pos AND p.reason=t.reason))
+          OR (resolution <> 'mapping_scope_unassessed' AND EXISTS (
+            SELECT 1 FROM query_limits p WHERE p.chrom=t.chrom AND p.start0<t.end_pos
+            AND p.end0>=t.pos AND (p.scope='all' OR
+              resolution NOT IN ('non_reference_observed','overlapping_variant_observed'))))
+    """).fetchone()[0]
+    metrics["target_mapping_scope_mismatches"] = int(scope_mismatches)
+    if scope_mismatches:
+        errors.append(
+            f"{scope_mismatches} target resolution(s) disagree with the family PAR query limits "
+            "in extensions/reconciliation.json; compare the full target REF span and source profile"
+        )
 
     orphan_variants = connection.execute(
         """
@@ -3609,7 +3637,11 @@ def validate_bundle(
         metrics["predictor_metadata"] = predictor_metadata
         metrics["predictor_semantic_controls"] = predictor_doctor_metadata
         metrics.update(_validate_reference_and_callability(connection, views, errors))
-        metrics.update(_validate_target_callability(connection, views, manifest, errors))
+        metrics.update(
+            _validate_target_callability(
+                connection, views, manifest, errors, bundle_par_scope(root)
+            )
+        )
         metrics["gene_index"] = _validate_gene_index(connection, views, errors)
         metrics["clinical_evidence"] = _validate_clinical_evidence(connection, views, errors)
         metrics["clinical_artifacts"] = _validate_clinical_artifacts(connection, views, errors)
