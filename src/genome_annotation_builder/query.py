@@ -403,7 +403,9 @@ def _callability(
     )
     if exact_partial and not variant_rows:
         conclusion = "partial_non_reference_observed"
-        reason = "the ALT is present in an incomplete genotype; its exact dosage is unknown"
+        reason = (
+            "the ALT is present; the projected genotype alone does not determine its exact dosage"
+        )
     elif partial_rows and not variant_rows:
         conclusion = "unknown_no_call"
         reason = "an overlapping normalized allele has an incomplete genotype"
@@ -1193,8 +1195,10 @@ def query_bundle(
             evidence_queries = [
                 (
                     "observed_partial_variants",
-                    "SELECT * FROM observed_partial_variants WHERE lower(variant_id) = lower(?) "
-                    "ORDER BY source_ordinal, source_alt_index",
+                    "SELECT p.*, r.source_info_json, r.other_format_json AS source_other_format_json "
+                    "FROM observed_partial_variants p "
+                    "JOIN reference_evidence r ON r.evidence_id = p.source_id "
+                    "WHERE lower(p.variant_id) = lower(?) ORDER BY p.source_ordinal, p.source_alt_index",
                     "extensions/observed_partial_variants",
                 ),
                 (

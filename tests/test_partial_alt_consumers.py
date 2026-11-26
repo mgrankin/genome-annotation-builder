@@ -72,6 +72,9 @@ def test_partial_alleles_are_searchable_without_a_complete_genotype_or_score(
         assert partial[0]["phased"] is False
         if operation == "callability":
             assert result["conclusion"] == "partial_non_reference_observed"
+        if operation == "evidence":
+            assert json.loads(partial[0]["source_other_format_json"])["EXTRA"] == [7, None, 9]
+            assert json.loads(partial[0]["source_info_json"])["PROBE"] == "test"
     overlap = query_bundle(bundle, "callability", term="chr1:3:G:A")
     assert overlap["conclusion"] == "unknown_no_call"
     assert any(row.get("rsid") == "rs900002" for row in overlap["rows"])
