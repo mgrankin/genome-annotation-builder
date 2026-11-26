@@ -50,8 +50,14 @@ LOCO_REVIEW_COLUMNS = frozenset(
         "exact_allele_in_loco_model",
     }
 )
+LOCO_CHILD_UNINFORMATIVE = "uninformative_child_genotype"
 LOCO_EXCEPTION_STATUSES = frozenset(
-    {"uninformative_parent_not_callable", "de_novo_candidate", "mendelian_conflict"}
+    {
+        LOCO_CHILD_UNINFORMATIVE,
+        "uninformative_parent_not_callable",
+        "de_novo_candidate",
+        "mendelian_conflict",
+    }
 )
 
 
@@ -118,8 +124,13 @@ class FamilyVariant:
 class LocoReviewRow:
     key: tuple[int, int, str, str]
     status: str
-    child_gt: tuple[int, ...]
+    child_gt: tuple[int, ...] | None
     exact_allele_in_model: bool
+
+    def concordance(self, accepted: tuple[int, ...]) -> bool | None:
+        if self.child_gt is None:
+            return None
+        return sorted(self.child_gt) == sorted(accepted)
 
 
 def _index_path(vcf: Path) -> Path | None:
@@ -201,6 +212,40 @@ def _parse_pedigree(path: Path) -> dict[str, PedigreeMember]:
     return members
 
 
+def _verify_loco_identity(document: dict[str, Any], sample: str, review_sha256: str) -> None:
+    if document.get("heldout_child") != sample:
+        raise InputValidationError("LOCO summary held-out subject does not match input sample")
+    if "status" in document and document["status"] != "PASS":
+        raise InputValidationError("LOCO measurement did not pass")
+    unit = document.get("validated_unit")
+    if (unit is not None and unit != sample) or "excluded_person_units" in document:
+        # A technical unit can have its own VCF sample name. The producer
+        # explicitly binds it to the held-out person and excludes it from the model.
+        excluded = document.get("excluded_person_units")
+        model = document.get("model_samples")
+        if (
+            not isinstance(unit, str)
+            or not unit
+            or not isinstance(excluded, list)
+            or unit not in excluded
+            or not isinstance(model, list)
+            or not model
+            or sample in model
+            or any(name in model for name in excluded)
+            or document.get("model_header_excludes_all_person_units") is not True
+        ):
+            raise InputValidationError(
+                "LOCO summary validated unit or model exclusions disagree with the held-out subject"
+            )
+    crosscheck = document.get("parental_haplotype_crosscheck")
+    if not isinstance(crosscheck, dict) or crosscheck.get("model_is_child_independent") is not True:
+        raise InputValidationError("LOCO summary does not prove a child-independent model")
+    if "artifacts_sha256" in document:
+        artifacts = document["artifacts_sha256"]
+        if not isinstance(artifacts, dict) or artifacts.get("review.tsv") != review_sha256:
+            raise InputValidationError("LOCO summary does not identify the configured review TSV")
+
+
 def _load_loco_summary(config: BuildConfig) -> dict[str, Any] | None:
     loco = config.family_evidence.loco
     if loco is None:
@@ -211,40 +256,27 @@ def _load_loco_summary(config: BuildConfig) -> dict[str, Any] | None:
         raise InputValidationError(f"invalid LOCO summary JSON: {exc}") from exc
     if not isinstance(document, dict) or not isinstance(document.get("counters"), dict):
         raise InputValidationError("LOCO summary must contain a counters mapping")
-    if document.get("heldout_child") != config.sample:
-        raise InputValidationError("LOCO summary held-out subject does not match input sample")
-    if document.get("validated_unit") not in {None, config.sample}:
-        raise InputValidationError("LOCO summary validated unit does not match input sample")
-    crosscheck = document.get("parental_haplotype_crosscheck")
-    if not isinstance(crosscheck, dict) or crosscheck.get("model_is_child_independent") is not True:
-        raise InputValidationError("LOCO summary does not prove a child-independent model")
+    _verify_loco_identity(document, config.sample, loco.review_expected_sha256)
     counters = document["counters"]
-    required = {
-        "heldout_carried_alleles",
-        "mendelian_consistent",
-        "de_novo_candidate",
-        "mendelian_conflict",
-        "uninformative_parent_not_callable",
-    }
-    if not required.issubset(counters):
-        raise InputValidationError("LOCO summary is missing required counters")
+    # The native producer serializes dict(Counter): zero bins are normally absent.
+    # It can also observe source records without any carried concrete autosomal ALT.
+    if "heldout_carried_alleles" not in counters and not (
+        type(counters.get("source_records")) is int and counters["source_records"] > 0
+    ):
+        raise InputValidationError("LOCO summary lacks a carried-allele or source-record count")
     normalized: dict[str, int] = {}
-    for key in required:
-        value = counters[key]
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+    for key in {"heldout_carried_alleles", "mendelian_consistent", *LOCO_EXCEPTION_STATUSES}:
+        value = counters.get(key, 0)
+        if type(value) is not int or value < 0:
             raise InputValidationError(f"LOCO counter {key} must be a non-negative integer")
         normalized[key] = value
     review_rows = document.get("review_rows")
     informative = document.get("informative_alleles")
-    if not isinstance(review_rows, int) or review_rows < 0:
+    if type(review_rows) is not int or review_rows < 0:
         raise InputValidationError("LOCO review_rows must be a non-negative integer")
-    if not isinstance(informative, int) or informative < 0:
+    if type(informative) is not int or informative < 0:
         raise InputValidationError("LOCO informative_alleles must be a non-negative integer")
-    exception_total = (
-        normalized["de_novo_candidate"]
-        + normalized["mendelian_conflict"]
-        + normalized["uninformative_parent_not_callable"]
-    )
+    exception_total = sum(normalized[status] for status in LOCO_EXCEPTION_STATUSES)
     if review_rows != exception_total:
         raise InputValidationError("LOCO review row accounting does not match exception counters")
     if normalized["heldout_carried_alleles"] != (normalized["mendelian_consistent"] + review_rows):
@@ -263,7 +295,7 @@ def _load_loco_summary(config: BuildConfig) -> dict[str, Any] | None:
             raise InputValidationError(
                 "LOCO consistency fraction must be null for zero denominator"
             )
-    elif not isinstance(fraction, (int, float)) or not math.isclose(
+    elif type(fraction) not in (int, float) or not math.isclose(
         float(fraction), expected_fraction, rel_tol=1e-12, abs_tol=1e-12
     ):
         raise InputValidationError("LOCO consistency fraction is inconsistent with counters")
@@ -379,11 +411,21 @@ def verify_family_resources(config: BuildConfig) -> dict[str, Any]:
     }
 
 
-def _parse_gt_text(value: str) -> tuple[int, ...]:
-    fields = re.split(r"[|/]", value)
-    if not fields or any(not field.isdigit() for field in fields):
-        raise InputValidationError("LOCO review contains an invalid subject genotype")
-    return tuple(int(field) for field in fields)
+def _parse_review_gt(value: str, status: str) -> tuple[int, ...] | None:
+    if status == LOCO_CHILD_UNINFORMATIVE:
+        # child_gt is the projection. The producer writes "." if it cannot
+        # score the native child_source_gt against this specific ALT.
+        if value != ".":
+            raise InputValidationError(
+                "uninformative LOCO child genotype must have a missing projection"
+            )
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"[01](?:[|/][01])?", value):
+        raise InputValidationError("LOCO review contains an invalid projected subject genotype")
+    genotype = tuple(int(field) for field in re.split(r"[|/]", value))
+    if 1 not in genotype:
+        raise InputValidationError("LOCO review genotype does not carry the reviewed ALT")
+    return genotype
 
 
 def _parse_provenance_gt(value: str) -> tuple[tuple[int, ...], bool]:
@@ -592,6 +634,7 @@ class LocoReviewStream:
         self.source_order_inversions_normalized = 0
         self.matched = 0
         self.unmatched = 0
+        self.matched_genotype_unassessable = 0
         self.matched_genotype_concordant = 0
         self.matched_genotype_discordant = 0
         self.discordant_status_counts: Counter[str] = Counter()
@@ -610,7 +653,7 @@ class LocoReviewStream:
                 status = raw["status"]
                 if status not in LOCO_EXCEPTION_STATUSES:
                     raise InputValidationError(f"unsupported LOCO review status: {status}")
-                child_gt = _parse_gt_text(raw["child_gt"])
+                child_gt = _parse_review_gt(raw["child_gt"], status)
                 exact = _boolean_text(raw["exact_allele_in_loco_model"])
                 source_key = (STANDARD_CHROMS[key[0]], key[1], key[2], key[3])
                 projections = normalization_projections.get(source_key)
@@ -625,7 +668,7 @@ class LocoReviewStream:
                     )
                 else:
                     expected_gt = projections[0].source_gt
-                    if sorted(child_gt) != sorted(expected_gt):
+                    if child_gt is not None and sorted(child_gt) != sorted(expected_gt):
                         self.normalization_projection_source_gt_discordant += 1
                     self.normalization_projected_source_rows += 1
                     projected_rows.extend(
@@ -666,7 +709,10 @@ class LocoReviewStream:
         if self._current is None or self._current.key > key:
             return None
         row = self._current
-        if sorted(row.child_gt) == sorted(subject_gt):
+        concordance = row.concordance(subject_gt)
+        if concordance is None:
+            self.matched_genotype_unassessable += 1
+        elif concordance:
             self.matched_genotype_concordant += 1
         else:
             self.matched_genotype_discordant += 1
@@ -697,6 +743,7 @@ class LocoReviewStream:
             "source_order_inversions_normalized": self.source_order_inversions_normalized,
             "matched_subject_variants": self.matched,
             "matched_genotype_concordant": self.matched_genotype_concordant,
+            "matched_genotype_unassessable": self.matched_genotype_unassessable,
             "matched_genotype_discordant": self.matched_genotype_discordant,
             "genotype_discordant_source_status_counts": dict(
                 sorted(self.discordant_status_counts.items())
@@ -1159,20 +1206,17 @@ def _make_row(
 ) -> dict[str, Any]:
     mendelian_status, parental_origin = _pedigree_status(variant, subject)
     loco_source_status = loco_row.status if loco_row is not None else None
-    loco_subject_gt_concordant = (
-        sorted(loco_row.child_gt) == sorted(variant.subject_gt) if loco_row is not None else None
-    )
-    loco_status = (
-        loco_source_status
-        if loco_subject_gt_concordant is True
-        else "source_genotype_discordant"
-        if loco_subject_gt_concordant is False
-        else "not_individually_persisted"
-        if config.loco is not None and variant.chrom in AUTOSOMES
-        else "not_assessed_outside_autosomal_loco"
-        if config.loco is not None
-        else "not_configured"
-    )
+    loco_subject_gt_concordant = loco_row.concordance(variant.subject_gt) if loco_row else None
+    if loco_row is not None:
+        loco_status = (
+            "source_genotype_discordant" if loco_subject_gt_concordant is False else loco_row.status
+        )
+    elif config.loco is None:
+        loco_status = "not_configured"
+    elif variant.chrom in AUTOSOMES:
+        loco_status = "not_individually_persisted"
+    else:
+        loco_status = "not_assessed_outside_autosomal_loco"
     tags = config.tags
     de_novo_candidate = (
         variant.family_confidence in tags.de_novo_confidence_values

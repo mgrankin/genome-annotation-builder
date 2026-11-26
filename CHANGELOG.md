@@ -6,6 +6,9 @@
   Target queries, polygenic scores and PharmCAT now respect those limits across
   the full reference span of the target. Keep the original read depth, quality
   and genotype available as supporting data.
+- Read sparse counters and uninformative child genotypes from native
+  leave-one-child-out family QC. Keep a missing genotype projection unassessed
+  and verify the review-table checksum supplied by its producer.
 
 ## 0.2.2 - 2026-11-26
 

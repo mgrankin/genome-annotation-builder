@@ -2760,8 +2760,12 @@ def _validate_family_evidence(
               loco_source_status IS NOT NULL OR
               loco_subject_gt_concordant IS NOT NULL OR
               loco_exact_allele_in_model IS NOT NULL
+            ) OR loco_status = 'uninformative_child_genotype' AND (
+              loco_source_status IS DISTINCT FROM loco_status OR
+              loco_subject_gt_concordant IS NOT NULL OR
+              loco_exact_allele_in_model IS NULL
             ) OR loco_status = 'source_genotype_discordant' AND (
-              loco_source_status NOT IN (
+              loco_source_status IS NULL OR loco_source_status NOT IN (
                 'uninformative_parent_not_callable',
                 'de_novo_candidate',
                 'mendelian_conflict'
@@ -2772,7 +2776,7 @@ def _validate_family_evidence(
               'de_novo_candidate',
               'mendelian_conflict'
             ) AND (
-              loco_source_status != loco_status OR
+              loco_source_status IS DISTINCT FROM loco_status OR
               loco_subject_gt_concordant IS DISTINCT FROM true OR
               loco_exact_allele_in_model IS NULL
             ) OR loco_status NOT IN (
@@ -2780,6 +2784,7 @@ def _validate_family_evidence(
               'not_assessed_outside_autosomal_loco',
               'not_configured',
               'source_genotype_discordant',
+              'uninformative_child_genotype',
               'uninformative_parent_not_callable',
               'de_novo_candidate',
               'mendelian_conflict'

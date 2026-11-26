@@ -550,9 +550,11 @@ An optional `loco` block accepts a checksum-pinned, uniquely keyed exception
 TSV plus its child-independent summary JSON. Source rows may arrive in any
 order; the adapter records ordering inversions and deterministically sorts them
 before joining. Exact exceptions and their source child genotype are projected
-through the same normalization provenance. The current contract retains source
-`de_novo_candidate`, `mendelian_conflict`, and
-`uninformative_parent_not_callable` states. If that source genotype differs
+through the same normalization provenance. The ledger can flag a de novo candidate, a Mendelian conflict, an uncallable
+parent, or an uninformative child genotype. For `uninformative_child_genotype`,
+the held-out source could not project a complete genotype for this ALT. The
+extension records null genotype concordance and preserves the source status.
+Summary counts include exceptions outside the subject's accepted core. If that source genotype differs
 from the accepted core genotype, the effective state is
 `source_genotype_discordant`: the source status remains available for audit,
 but cannot promote a de-novo/conflict claim or alter the accepted genotype.

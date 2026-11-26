@@ -303,7 +303,11 @@ status counts must reproduce the summary, source-order inversions are counted,
 and rows are deterministically sorted before the join. Exact exceptions are
 projected through the same normalization provenance and may annotate a core
 row. The extension retains both source status and source-child-GT concordance.
-If the source child genotype disagrees with the accepted core genotype, the
+The producer may omit zero-valued summary counters. The adapter reconciles the
+carried, informative and exception totals and checks the embedded review digest
+when supplied. An uninformative child projection (`child_gt=.`) retains the
+`uninformative_child_genotype` status and has null genotype concordance.
+If a complete source child genotype disagrees with the accepted core genotype, the
 effective status is `source_genotype_discordant`; the original status remains
 auditable but cannot be promoted into a de-novo or Mendelian-conflict claim.
 The accepted core genotype is never changed. The absence of an exception is

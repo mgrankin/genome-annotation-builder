@@ -25,6 +25,7 @@ from genome_annotation_builder.errors import (
     InputValidationError,
     ReconciliationError,
 )
+from genome_annotation_builder.family_evidence import _load_loco_summary
 from genome_annotation_builder.normalization import normalize_projected_vcf
 from genome_annotation_builder.pgs import _resolve_locus
 from genome_annotation_builder.pipeline import build_bundle
@@ -1044,6 +1045,95 @@ def test_family_evidence_is_subject_only_and_exactly_reconciled(tmp_path: Path) 
     )
     assert family_summary["loco"]["materialization"]["matched_genotype_discordant"] == 2
     assert family_summary["loco"]["materialization"]["source_order_inversions_normalized"] == 1
+
+
+def test_family_loco_unscorable_source_projection_and_sparse_counters(tmp_path: Path) -> None:
+    config, _ = _environment(tmp_path, family=True)
+    family = config.family_evidence
+    loco = family.loco
+    assert loco is not None
+    # Two carried ALTs from 1|2 and one from 1/. have no complete target
+    # genotype in the held-out source. The separate family master has its own calls.
+    review = (
+        "chrom\tpos\tref\talt\tstatus\tchild_gt\texact_allele_in_loco_model"
+        "\tchild_source_gt\tchild_projection_status\n"
+        "1\t11\tG\tT\tuninformative_child_genotype\t.\tTrue\t1|2\tother_known_alt\n"
+        "1\t11\tG\tA\tuninformative_child_genotype\t.\tFalse\t1|2\tother_known_alt\n"
+        "1\t26\tC\tT\tuninformative_child_genotype\t.\tFalse\t1/.\tmissing_gt\n"
+    )
+    loco.review_tsv.write_text(review, encoding="utf-8")
+    review_digest = hashlib.sha256(loco.review_tsv.read_bytes()).hexdigest()
+    summary = json.loads(loco.summary_json.read_bytes())
+    summary.update(
+        counters={
+            "source_records": 2,
+            "heldout_carried_alleles": 3,
+            "uninformative_child_genotype": 3,
+        },
+        informative_alleles=0,
+        mendelian_consistency_fraction=None,
+        artifacts_sha256={"review.tsv": review_digest},
+    )
+    loco.summary_json.write_text(json.dumps(summary), encoding="utf-8")
+    loco = replace(
+        loco,
+        review_expected_sha256=review_digest,
+        summary_expected_sha256=hashlib.sha256(loco.summary_json.read_bytes()).hexdigest(),
+    )
+    config = replace(config, family_evidence=replace(family, loco=loco))
+    sync_pinned_resources(config)
+    result = build_bundle(config)
+    assert result["status"] == "PASS"
+    family_stage = config.work_dir / f"run-{result['run_key']}" / "05-family-evidence"
+    metrics = json.loads((family_stage / "family_evidence_summary.json").read_bytes())["loco"][
+        "materialization"
+    ]
+    assert metrics["review_rows"] == 3
+    assert metrics["matched_genotype_unassessable"] == 2
+    assert metrics["projected_review_rows_outside_subject_core"] == 1
+    assert metrics["matched_genotype_discordant"] == metrics["matched_genotype_concordant"] == 0
+    assert metrics["status_counts"] == {"uninformative_child_genotype": 3}
+    family_rows = pq.read_table(
+        config.bundle_path / "extensions" / "family_evidence.parquet"
+    ).to_pylist()
+    matching = sorted((row for row in family_rows if row["pos"] == 11), key=lambda row: row["alt"])
+    assert [row["loco_exact_allele_in_model"] for row in matching] == [False, True]
+    for row in matching:
+        assert row["loco_status"] == row["loco_source_status"] == "uninformative_child_genotype"
+        assert row["loco_subject_gt_concordant"] is None
+        assert row["de_novo_candidate"] is False
+    for counters, total, fraction in [
+        ({"source_records": 2, "heldout_carried_alleles": 2, "mendelian_consistent": 2}, 2, 1.0),
+        ({"source_records": 2}, 0, None),
+    ]:
+        summary.update(
+            counters=counters,
+            informative_alleles=total,
+            review_rows=0,
+            mendelian_consistency_fraction=fraction,
+        )
+        loco.summary_json.write_text(json.dumps(summary), encoding="utf-8")
+        verified = _load_loco_summary(config)
+        assert verified is not None
+        assert verified["counters"]["heldout_carried_alleles"] == total
+        assert verified["counters"]["uninformative_child_genotype"] == 0
+    summary.update(
+        validated_unit="TECHNICAL_UNIT",
+        excluded_person_units=["SAMPLE_ID", "TECHNICAL_UNIT"],
+        model_samples=["FATHER", "MOTHER"],
+        model_header_excludes_all_person_units=True,
+    )
+    loco.summary_json.write_text(json.dumps(summary), encoding="utf-8")
+    assert _load_loco_summary(config) is not None
+    summary["model_samples"].append("TECHNICAL_UNIT")
+    loco.summary_json.write_text(json.dumps(summary), encoding="utf-8")
+    with pytest.raises(InputValidationError, match="validated unit"):
+        _load_loco_summary(config)
+    summary["model_samples"].pop()
+    summary["artifacts_sha256"]["review.tsv"] = "0" * 64
+    loco.summary_json.write_text(json.dumps(summary), encoding="utf-8")
+    with pytest.raises(InputValidationError, match="identify the configured review TSV"):
+        _load_loco_summary(config)
 
 
 def test_family_evidence_accepts_separatorless_haploid_normalization_projection(
