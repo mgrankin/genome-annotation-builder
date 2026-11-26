@@ -72,6 +72,9 @@ def test_partial_alleles_are_searchable_without_a_complete_genotype_or_score(
         assert partial[0]["phased"] is False
         if operation == "callability":
             assert result["conclusion"] == "partial_non_reference_observed"
+    overlap = query_bundle(bundle, "callability", term="chr1:3:G:A")
+    assert overlap["conclusion"] == "unknown_no_call"
+    assert any(row.get("rsid") == "rs900002" for row in overlap["rows"])
     deletion = query_bundle(bundle, "variant", term="rs900002")["rows"]
     assert len(deletion) == 1
     assert (deletion[0]["pos"], deletion[0]["gt"], deletion[0]["phased"]) == (1, [None, 1], True)

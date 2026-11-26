@@ -310,6 +310,16 @@ def _callability(
     partial_rows, partial_truncated = _partial_variants(
         connection, views, predicate, parameters, limit
     )
+    exact_partial = bool(partial_rows)
+    if not exact_partial and "observed_partial_variants" in views:
+        end_pos = pos + len(ref or "N") - 1
+        partial_rows, partial_truncated = _partial_variants(
+            connection,
+            views,
+            "chrom = ? AND pos <= ? AND pos + length(ref) - 1 >= ?",
+            [chrom, end_pos, pos],
+            limit,
+        )
     evidence_rows: list[dict[str, Any]] = []
     region_rows: list[dict[str, Any]] = []
     callability_rows: list[dict[str, Any]] = []
@@ -391,9 +401,12 @@ def _callability(
     materialized_reason = (
         str(target_evidence_rows[0]["reason"]) if len(target_evidence_rows) == 1 else None
     )
-    if partial_rows and not variant_rows:
+    if exact_partial and not variant_rows:
         conclusion = "partial_non_reference_observed"
         reason = "the ALT is present in an incomplete genotype; its exact dosage is unknown"
+    elif partial_rows and not variant_rows:
+        conclusion = "unknown_no_call"
+        reason = "an overlapping normalized allele has an incomplete genotype"
     elif "non_reference_observed" in resolutions:
         conclusion = "non_reference_observed"
         reason = materialized_reason or "a materialized target has a carried target/site allele"
