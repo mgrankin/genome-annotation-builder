@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4 - 2026-11-28
+
+- Reclaim the two temporary Picard mate FASTQs after a fresh Release C HLA*LA
+  matrix job validates its typed result. Preserve the extracted BAM, raw HLA
+  table and typed calls for replay. Existing workspaces and failed attempts
+  retain their files.
+
 ## 0.2.3 - 2026-11-26
 
 - Preserve the family VCF producer’s mapping limits at pseudoautosomal regions.

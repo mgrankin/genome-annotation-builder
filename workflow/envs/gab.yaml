@@ -1,4 +1,4 @@
-name: genome-annotation-builder-0.2.3
+name: genome-annotation-builder-0.2.4
 channels:
   - conda-forge
   - bioconda
