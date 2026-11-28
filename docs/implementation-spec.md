@@ -40,13 +40,20 @@ and no overlapping non-reference/no-call evidence supersedes it.
 
 Concrete ALT alleles present in a complete sample genotype enter
 `variants.parquet`. An incomplete genotype retains its locus-level `no_call`
-and false callability. A concrete ALT explicitly present in its GT also goes
+and false callability. A concrete core ALT explicitly present in its GT also goes
 through the normal normalization and VEP stages. The resulting annotations
 are published in `extensions/observed_partial_variants.parquet`. For example,
 `./2` projects only ALT 2, with GT `[null, 1]`. Unknown slots remain null
 and their position and phase separator are preserved. Neither `0/.` nor
 `./.` contributes an observed ALT, including when native dosage metadata
 is positive.
+
+An explicitly carried symbolic allele or allele outside the core chromosomes
+is recorded in `extensions/non_core_variants.parquet` with its exclusion
+category, selected ALT index and original nullable GT. The same classification
+applies to complete and partial genotypes. Starting in Builder 0.2.6, bundle
+validation reconciles the identities of all explicit input GT alleles against
+the normalized source alleles and these exclusions.
 
 The extension carries the normalized variant ID, coordinates, REF, ALT,
 nullable GT slots, phase and typed gene and transcript consequences. Its

@@ -444,6 +444,7 @@ def ingest_reference_confidence_vcf(
         current_contig: str | None = None
         current_reference = ""
         counters: Counter[str] = Counter()
+        explicit_alleles = MultisetDigest()
         accepted_evidence_digest = MultisetDigest()
 
         try:
@@ -554,6 +555,8 @@ def ingest_reference_confidence_vcf(
                     called_indices = sorted(
                         {allele for allele in gt if allele is not None and allele > 0}
                     )
+                    for alt_index in called_indices:
+                        explicit_alleles.add(f"{source_id}:a{alt_index}")
                     if not complete:
                         counters["records_no_call"] += 1
                         evidence_writer.write(
@@ -583,16 +586,6 @@ def ingest_reference_confidence_vcf(
                                 reason="incomplete_or_absent_GT",
                             )
                         )
-                        # Retain the locus-level no-call. Only an explicit, concrete GT
-                        # allele has a partial variant annotation; native FORMAT evidence
-                        # alone cannot select a genotype or a different ALT.
-                        called_indices = [
-                            i
-                            for i in called_indices
-                            if canonical_core_chrom(record.contig)
-                            and _is_concrete(ref)
-                            and _is_concrete(alts[i - 1])
-                        ]
                         if not called_indices:
                             continue
                     if not called_indices:
@@ -658,7 +651,7 @@ def ingest_reference_confidence_vcf(
                                     "alt": alt,
                                     "category": category,
                                     "source_alt_index": alt_index,
-                                    "source_gt": [int(allele) for allele in gt],
+                                    "source_gt": list(gt),
                                     "phased": phased,
                                     "dp": dp,
                                     "gq": gq,
@@ -762,6 +755,7 @@ def ingest_reference_confidence_vcf(
             "status": "PASS",
             "input_sha256": input_sha256,
             "input_basename": config.input_vcf.name,
+            "explicit_gt_alleles": explicit_alleles.as_dict(),
             "accepted_evidence_multiset": accepted_evidence_digest.as_dict(),
             "counters": dict(sorted(counters.items())),
             "outputs": {

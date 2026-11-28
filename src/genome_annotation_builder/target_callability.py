@@ -423,8 +423,9 @@ def _build_hit_tables(
                count(*)::BIGINT AS non_core_hit_count,
                CASE WHEN count(*) = count(n.dp) THEN min(n.dp) END AS non_core_depth,
                CASE WHEN count(*) = count(n.gq) THEN min(n.gq) END AS non_core_gq,
-               CASE WHEN count(DISTINCT list_count(n.source_gt)) = 1
-                    THEN min(list_count(n.source_gt))::TINYINT END AS non_core_ploidy,
+               bool_or(list_count(n.source_gt) < len(n.source_gt)) AS partial_non_core_hit,
+               CASE WHEN count(DISTINCT len(n.source_gt)) = 1
+                    THEN min(len(n.source_gt))::TINYINT END AS non_core_ploidy,
                list(n.evidence_id ORDER BY n.evidence_id) AS non_core_evidence_ids
         FROM targets t
         JOIN non_core n
@@ -570,7 +571,8 @@ def _resolve(
     reference_ids = list(row.get("reference_evidence_ids") or [])
     region_ids = list(row.get("region_ids") or [])
 
-    if (variant_count or non_core_count) and not row.get("normalized_no_call"):
+    partial_hit = row.get("normalized_no_call") or row.get("partial_non_core_hit")
+    if (variant_count or non_core_count) and not partial_hit:
         exact = bool(row.get("exact_target_observed")) or (
             row.get("variant_id") is None and variant_count > 0
         )
@@ -733,7 +735,7 @@ def _materialize(
                v.variant_confidence, v.variant_depth, v.variant_gq, v.variant_ploidy,
                v.observed_variant_ids, v.observed_variant_source_digests,
                n.non_core_hit_count, n.non_core_depth, n.non_core_gq, n.non_core_ploidy,
-               n.non_core_evidence_ids,
+               n.non_core_evidence_ids, n.partial_non_core_hit,
                r.no_call_count, r.no_call_evidence_ids, r.no_call_depth, r.no_call_gq,
                r.no_call_ploidy, r.reference_count, r.reference_evidence_ids,
                r.references_callable, r.reference_confidence, r.reference_depth,

@@ -6,14 +6,17 @@ from dataclasses import replace
 from pathlib import Path
 
 import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pysam
 import pytest
 from test_vcf_core import _environment
 
-from genome_annotation_builder.errors import GenomeBuilderError
+from genome_annotation_builder.errors import BundleValidationError, GenomeBuilderError
 from genome_annotation_builder.pipeline import build_bundle
 from genome_annotation_builder.query import query_bundle
 from genome_annotation_builder.resources import sync_pinned_resources
+from genome_annotation_builder.validator import validate_bundle
 from genome_annotation_builder.vcf_ingest import _canonical_json_text
 
 
@@ -107,6 +110,64 @@ def test_partial_alleles_are_searchable_without_a_complete_genotype_or_score(
             "SELECT count(*) FROM read_parquet(?) WHERE rsid = ?",
             [str(bundle / "variants.parquet" / "**/*.parquet"), "rs100001"],
         ).fetchone() == (0,)
+
+
+def test_partial_gt_accounts_for_excluded_alleles_in_a_hybrid_build(tmp_path: Path) -> None:
+    config, original = _environment(tmp_path, target_catalog=True)
+    with config.reference_fasta.open("a") as handle:
+        handle.write(">unplaced\nACGT\n")
+    pysam.faidx(str(config.reference_fasta))
+    with gzip.open(original, "rt") as handle:
+        source = handle.read()
+    source = source.replace("#CHROM", "##contig=<ID=unplaced,length=4>\n#CHROM").replace(
+        "0/1:22:35:11,11:PASS", ".|1:22:35:11,11:PASS"
+    )
+    source += (
+        "unplaced\t1\t.\tA\tC,G\t60\tPASS\t.\tGT\t./2\n"
+        "unplaced\t2\t.\tC\tT\t60\tPASS\t.\tGT\t0/.\n"
+        "unplaced\t3\t.\tG\tA\t60\tPASS\t.\tGT\t.\n"
+    )
+    plain = tmp_path / "excluded.vcf"
+    plain.write_text(source)
+    config = replace(config, input_vcf=Path(pysam.tabix_index(str(plain), preset="vcf")))
+    sync_pinned_resources(config)
+    assert build_bundle(config)["validation"]["valid"]
+    extensions = config.bundle_path / "extensions"
+    with duckdb.connect() as db:
+        exclusions = db.execute(
+            "SELECT chrom, alt, category, source_alt_index, source_gt, phased "
+            "FROM read_parquet(?) ORDER BY chrom",
+            [str(extensions / "non_core_variants.parquet/**/*.parquet")],
+        ).fetchall()
+        assert exclusions == [
+            ("chr1", "<DEL>", "symbolic_or_non_acgt_allele", 1, [None, 1], True),
+            ("unplaced", "G", "non_core_contig", 2, [None, 2], False),
+        ]
+        target = db.execute(
+            "SELECT resolution, callable, reference_observed, observed_ploidy, "
+            "len(observed_non_core_evidence_ids), len(overlapping_no_call_evidence_ids) "
+            "FROM read_parquet(?) WHERE target_id='symbolic_overlap'",
+            [str(extensions / "target_callability_evidence.parquet")],
+        ).fetchone()
+        assert target == ("no_call", False, None, 2, 1, 1)
+
+    parquet = next((extensions / "non_core_variants.parquet").glob("**/*.parquet"))
+    rows = pq.read_table(parquet)
+    for changed_gt in ([0, 2], [None, 1]):
+        changed = [
+            dict(row, source_gt=changed_gt) if row["chrom"] == "unplaced" else row
+            for row in rows.to_pylist()
+        ]
+        pq.write_table(pa.Table.from_pylist(changed, schema=rows.schema), parquet)
+        with pytest.raises(
+            BundleValidationError, match="excluded alleles differ from source genotype"
+        ):
+            validate_bundle(config.bundle_path, reference_fasta=config.reference_fasta)
+    pq.write_table(
+        rows.filter([value != "unplaced" for value in rows["chrom"].to_pylist()]), parquet
+    )
+    with pytest.raises(BundleValidationError, match="differ from explicit input GT alleles"):
+        validate_bundle(config.bundle_path, reference_fasta=config.reference_fasta)
 
 
 def test_existing_bundle_requires_matching_build_identity(tmp_path: Path) -> None:

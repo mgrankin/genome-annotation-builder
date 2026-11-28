@@ -1162,6 +1162,7 @@ def _validate_target_callability(
 def _validate_provenance(
     connection: duckdb.DuckDBPyConnection,
     root: Path,
+    pipeline_version: str,
     errors: list[str],
 ) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
@@ -1249,6 +1250,37 @@ def _validate_provenance(
         errors.append("reconciliation normalized-variant count mismatch")
     if reconciliation.get("observed_partial_variant_rows", 0) != partial_rows:
         errors.append("reconciliation observed partial variant count mismatch")
+    version = re.fullmatch(r"genome-annotation-builder-(\d+)\.(\d+)\.(\d+)", pipeline_version)
+    if "explicit_gt_alleles" in reconciliation or (
+        version and tuple(map(int, version.groups())) >= (0, 2, 6)
+    ):
+        if "non_core_variants" in views:
+            bad_exclusions = connection.execute("""
+                SELECT count(*) FROM non_core_variants n
+                LEFT JOIN reference_evidence r
+                  ON r.state='no_call' AND r.evidence_id=split_part(n.evidence_id, ':a', 1)
+                WHERE NOT coalesce(list_contains(n.source_gt, n.source_alt_index), false)
+                   OR n.evidence_id IS DISTINCT FROM concat(
+                       split_part(n.evidence_id, ':a', 1), ':a', n.source_alt_index)
+                   OR (r.evidence_id IS NULL AND list_count(n.source_gt) < len(n.source_gt))
+                   OR (r.evidence_id IS NOT NULL AND (
+                       n.source_gt IS DISTINCT FROM r.gt OR n.phased IS DISTINCT FROM r.phased
+                       OR len(n.source_gt) IS DISTINCT FROM r.ploidy
+                       OR n.chrom != r.chrom OR n.pos != r.start_pos
+                       OR n.source_ordinal != r.source_ordinal
+                       OR n.source_record_digest != r.source_record_digest
+                       OR n.source_alt_index NOT BETWEEN 1 AND len(r.source_alts)
+                       OR n.alt IS DISTINCT FROM r.source_alts[n.source_alt_index]
+                       OR r.reference_observed IS NOT NULL OR r.callable IS DISTINCT FROM false))
+            """).fetchone()[0]
+            if bad_exclusions:
+                errors.append("excluded alleles differ from source genotype evidence")
+            cursor = connection.execute("SELECT evidence_id FROM non_core_variants")
+            while batch := cursor.fetchmany(100_000):
+                for (evidence_id,) in batch:
+                    multiset.add(evidence_id)
+        if reconciliation.get("explicit_gt_alleles") != multiset.as_dict():
+            errors.append("normalized and excluded alleles differ from explicit input GT alleles")
     if reconciliation.get("missing_to_reference_conversions") != 0:
         errors.append("reconciliation reports a missing-to-reference conversion")
     metrics.update(
@@ -3661,7 +3693,9 @@ def validate_bundle(
         metrics["clingen_gene_context"] = _validate_clingen_gene_context(
             connection, views, manifest, documents, root, errors
         )
-        metrics["provenance"] = _validate_provenance(connection, root, errors)
+        metrics["provenance"] = _validate_provenance(
+            connection, root, str(manifest.get("pipeline_version", "")), errors
+        )
     finally:
         connection.close()
 

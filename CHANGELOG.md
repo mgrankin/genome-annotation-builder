@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.6 - 2026-11-28
+
+- Record known alternate alleles from partial genotypes in the exclusions table
+  when their contig is outside the core annotation set. Preserve the original
+  partial genotype.
+
 ## 0.2.5 - 2026-11-28
 
 - Use the declared alignment, reference and BAF indexes during Release C input
