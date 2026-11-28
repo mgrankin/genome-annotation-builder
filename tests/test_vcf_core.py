@@ -68,8 +68,8 @@ def _synthetic_family_config(
 ##FORMAT=<ID=DNM,Number=1,Type=Float,Description="De-novo score">
 ##FORMAT=<ID=PS,Number=1,Type=String,Description="Phase set">
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tFATHER\tMOTHER\tSAMPLE_ID
-1\t10\t.\tC\tT\t60\tPASS\t.\tGT:FC:FR:GS:XS:DNM:PS\t0/1:.:.:.:.:.:.\t0/0:.:.:.:.:.:.\t0/1:HIGH_CONFIDENCE:NO_MENDELIAN_CONFLICT:1:2:0:.
-1\t11\t.\tG\tA\t60\tPASS\t.\tGT:FC:FR:GS:XS:DNM:PS\t0/0:.:.:.:.:.:.\t0/1:.:.:.:.:.:.\t1/0:SUPPORTED:NO_MENDELIAN_CONFLICT:1:1:0:.
+1\t10\t.\tC\tT\t60\tPASS\t.\tGT:FC:FR:GS:XS:DNM:PS\t1/1:.:.:.:.:.:.\t0/1:.:.:.:.:.:.\t0/1:HIGH_CONFIDENCE:NO_MENDELIAN_CONFLICT:1:2:0:.
+1\t11\t.\tG\tA\t60\tPASS\t.\tGT:FC:FR:GS:XS:DNM:PS\t0/1:.:.:.:.:.:.\t1/1:.:.:.:.:.:.\t1/0:SUPPORTED:NO_MENDELIAN_CONFLICT:1:1:0:.
 1\t11\t.\tG\tT\t60\tPASS\t.\tGT:FC:FR:GS:XS:DNM:PS\t0/1:.:.:.:.:.:.\t0/0:.:.:.:.:.:.\t0/1:SUPPORTED:NO_MENDELIAN_CONFLICT:1:.:0:.
 1\t22\t.\tC\tG\t60\tPASS\t.\tGT:FC:FR:GS:XS:DNM:PS\t0/1:.:.:.:.:.:.\t0/1:.:.:.:.:.:.\t1/1:SUPPORTED:NO_MENDELIAN_CONFLICT:0:.:0:.
 1\t23\t.\tG\tGA\t60\tPASS\tDIFFICULT\tGT:FC:FR:GS:XS:DNM:PS\t0/0:.:.:.:.:.:.\t0/0:.:.:.:.:.:.\t0/1:DE_NOVO_CANDIDATE:PARENTAL_MOSAICISM_CANDIDATE:1:0:50:.
@@ -955,7 +955,7 @@ def test_family_evidence_is_subject_only_and_exactly_reconciled(tmp_path: Path) 
         connection.close()
     assert rows["chr1:10:C:T"] == (
         "inherited_paternal",
-        "paternal_observed",
+        "both_parents_observed",
         "consistent",
         "not_individually_persisted",
         False,
@@ -965,6 +965,12 @@ def test_family_evidence_is_subject_only_and_exactly_reconciled(tmp_path: Path) 
         "exact_genotype_concordant",
         "both_sources_exact_genotype_concordant",
         False,
+    )
+    assert rows["chr1:11:G:A"][:3] == ("inherited_maternal", "both_parents_observed", "consistent")
+    assert rows["chr1:22:C:G"][:3] == (
+        "inherited_biparental",
+        "both_parents_observed",
+        "consistent",
     )
     assert rows["chr1:23:G:GA"] == (
         "de_novo_candidate",

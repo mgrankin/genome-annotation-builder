@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7 - 2026-11-28
+
+- Resolve which parent transmitted an ALT when the complete autosomal trio
+  genotypes determine it. A consistent homozygous ALT child is recorded as
+  `inherited_biparental`. The parental carrier observations remain available.
+
 ## 0.2.6 - 2026-11-28
 
 - Record known alternate alleles from partial genotypes in the exclusions table

@@ -290,9 +290,16 @@ representation and is never interpreted as evidence of biological phasing.
 Autosomal Mendelian compatibility is derived only when the subject and both
 parents have complete diploid biallelic genotypes. Other ploidies,
 sex/mitochondrial chromosomes, a missing parent, and partial calls remain
-`not_assessed` or unresolved. Parental origin describes observed ALT presence,
-not biological proof beyond the recorded pedigree. Caller-provided conflict or
-de-novo classes may lower confidence or trigger review, but cannot modify GT.
+`not_assessed` or unresolved. The field `parental_origin` records which parents'
+genotypes contain the ALT. Since Builder 0.2.7, `inheritance_state` resolves
+the possible transmissions of one allele from each parent under the recorded
+pedigree. A consistent 1/1 child is `inherited_biparental`. For a 0/1 child
+with two carrier parents, a 1/1 father or mother must supply the ALT. Two 0/1
+parents leave that transmission ambiguous. Allele order and phase-set labels
+carry no assumption about parent of origin. Earlier bundles retain the
+inheritance states calculated by their recorded Builder version. Caller-provided
+conflict or de-novo classes may lower confidence or trigger review, but cannot
+modify GT.
 
 `extensions/family_evidence.parquet` stores the subject GT/phase, optional phase
 set, family confidence/reasons, inheritance and observed parental-origin state,

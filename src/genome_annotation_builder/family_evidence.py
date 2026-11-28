@@ -37,6 +37,12 @@ from .vcf_ingest import canonical_core_chrom
 
 CONCRETE_ALLELE = re.compile(r"[ACGT]+")
 AUTOSOMES = frozenset(f"chr{value}" for value in range(1, 23))
+TRANSMISSION_STATE = {
+    (1, 0): "inherited_paternal",
+    (0, 1): "inherited_maternal",
+    (1, 1): "inherited_biparental",
+    (0, 0): "not_assessed",  # No carried ALT to assign.
+}
 CHROM_RANK = {chrom: rank for rank, chrom in enumerate(STANDARD_CHROMS)}
 SourceAlleleKey = tuple[str, int, str, str]
 LOCO_REVIEW_COLUMNS = frozenset(
@@ -1123,20 +1129,18 @@ def _complete_diploid(gt: tuple[int | None, ...] | None) -> tuple[int, int] | No
     return int(gt[0]), int(gt[1])  # type: ignore[arg-type]
 
 
-def _pedigree_status(variant: FamilyVariant, subject: PedigreeMember) -> tuple[str, str]:
+def _pedigree_status(variant: FamilyVariant, subject: PedigreeMember) -> tuple[str, str, str]:
     if not subject.parents:
-        return "not_applicable_founder", "not_applicable"
+        return "not_applicable_founder", "not_applicable", "founder_observation"
     if variant.chrom not in AUTOSOMES or len(subject.parents) != 2:
-        return "not_assessed", "unknown"
+        return "not_assessed", "unknown", "not_assessed"
     if len(variant.subject_gt) != 2:
-        return "not_assessed", "unknown"
+        return "not_assessed", "unknown", "not_assessed"
     father = _complete_diploid(variant.father_gt)
     mother = _complete_diploid(variant.mother_gt)
     child = _complete_diploid(variant.subject_gt)
     if father is None or mother is None or child is None:
-        return "parent_or_subject_no_call", "unknown"
-    possible = {tuple(sorted((paternal, maternal))) for paternal in father for maternal in mother}
-    mendelian = "consistent" if tuple(sorted(child)) in possible else "conflict"
+        return "parent_or_subject_no_call", "unknown", "unresolved_parent_no_call"
     father_alt = 1 in father
     mother_alt = 1 in mother
     if father_alt and mother_alt:
@@ -1147,7 +1151,20 @@ def _pedigree_status(variant: FamilyVariant, subject: PedigreeMember) -> tuple[s
         origin = "maternal_observed"
     else:
         origin = "neither_parent_observed"
-    return mendelian, origin
+    # Each valid pair is ordered by PED role. The ordering of the child's GT
+    # does not label a paternal or maternal chromosome, even when GT is phased.
+    child_alt_count = sum(child)
+    transmissions = {
+        (paternal, maternal)
+        for paternal in father
+        for maternal in mother
+        if paternal + maternal == child_alt_count
+    }
+    if not transmissions:
+        return "conflict", origin, "mendelian_conflict"
+    if len(transmissions) > 1:
+        return "consistent", origin, "inherited_parent_ambiguous"
+    return "consistent", origin, TRANSMISSION_STATE[transmissions.pop()]
 
 
 def _caller_status(value: int | None) -> str:
@@ -1204,7 +1221,7 @@ def _make_row(
     pedigree_sha256: str,
     loco_row: LocoReviewRow | None,
 ) -> dict[str, Any]:
-    mendelian_status, parental_origin = _pedigree_status(variant, subject)
+    mendelian_status, parental_origin, inheritance_state = _pedigree_status(variant, subject)
     loco_source_status = loco_row.status if loco_row is not None else None
     loco_subject_gt_concordant = loco_row.concordance(variant.subject_gt) if loco_row else None
     if loco_row is not None:
@@ -1229,24 +1246,8 @@ def _make_row(
         )
     if source_conflict or de_novo_candidate:
         mendelian_status = "conflict"
-    if not subject.parents:
-        inheritance_state = "founder_observation"
-    elif de_novo_candidate:
-        inheritance_state = "de_novo_candidate"
-    elif mendelian_status == "conflict":
-        inheritance_state = "mendelian_conflict"
-    elif mendelian_status == "parent_or_subject_no_call":
-        inheritance_state = "unresolved_parent_no_call"
-    elif mendelian_status != "consistent":
-        inheritance_state = "not_assessed"
-    elif parental_origin == "paternal_observed":
-        inheritance_state = "inherited_paternal"
-    elif parental_origin == "maternal_observed":
-        inheritance_state = "inherited_maternal"
-    elif parental_origin == "both_parents_observed":
-        inheritance_state = "inherited_parent_ambiguous"
-    else:
-        inheritance_state = "unresolved_neither_parent_observed"
+        if subject.parents:
+            inheritance_state = "de_novo_candidate" if de_novo_candidate else "mendelian_conflict"
     subject_payload = {
         "variant_id": variant.variant_id,
         "subject_gt": list(variant.subject_gt),
