@@ -851,6 +851,7 @@ def build_target_callability(
                 connection.close()
 
         summary = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "catalog": {
                 "sha256": actual,

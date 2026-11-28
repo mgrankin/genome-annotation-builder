@@ -491,6 +491,7 @@ def project_pgx_results(
             outputs["pgx_guidance_audit.parquet"] = sha256_file(guidance_path)
         statuses = Counter(str(row["call_status"]) for row in audit_rows)
         summary = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "caller": "PharmCAT",
             "caller_version": PHARMCAT_VERSION,

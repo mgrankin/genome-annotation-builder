@@ -26,6 +26,7 @@ from .config import BuildConfig, FamilyEvidenceConfig
 from .constants import STANDARD_CHROMS
 from .errors import InputValidationError, ReconciliationError
 from .parquet_io import PartitionedParquetWriter
+from .pedigree import PedigreeMember, parse_pedigree
 from .util import (
     atomic_output_directory,
     atomic_write_json,
@@ -65,19 +66,6 @@ LOCO_EXCEPTION_STATUSES = frozenset(
         "mendelian_conflict",
     }
 )
-
-
-@dataclass(frozen=True)
-class PedigreeMember:
-    family_id: str
-    individual: str
-    father: str | None
-    mother: str | None
-    sex: int
-
-    @property
-    def parents(self) -> tuple[str, ...]:
-        return tuple(value for value in (self.father, self.mother) if value is not None)
 
 
 @dataclass(frozen=True)
@@ -156,66 +144,6 @@ def _contains_pedigree_identifier(text: str, identifiers: tuple[str, ...]) -> bo
         ):
             return True
     return False
-
-
-def _parse_pedigree(path: Path) -> dict[str, PedigreeMember]:
-    members: dict[str, PedigreeMember] = {}
-    with path.open("rt", encoding="utf-8", newline="") as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            fields = line.split()
-            if len(fields) != 6:
-                raise InputValidationError(
-                    f"PED line {line_number} must contain exactly six fields"
-                )
-            family_id, individual, father_raw, mother_raw, sex_raw, _phenotype = fields
-            if individual in members:
-                raise InputValidationError("PED contains a duplicate individual identifier")
-            try:
-                sex = int(sex_raw)
-            except ValueError as exc:
-                raise InputValidationError(f"PED line {line_number} has invalid sex") from exc
-            if sex not in {0, 1, 2}:
-                raise InputValidationError(f"PED line {line_number} has unsupported sex code")
-            father = None if father_raw == "0" else father_raw
-            mother = None if mother_raw == "0" else mother_raw
-            if individual in {father, mother}:
-                raise InputValidationError("PED individual cannot be its own parent")
-            members[individual] = PedigreeMember(
-                family_id=family_id,
-                individual=individual,
-                father=father,
-                mother=mother,
-                sex=sex,
-            )
-    if not members:
-        raise InputValidationError("PED contains no individuals")
-    for member in members.values():
-        for parent in member.parents:
-            if parent not in members:
-                raise InputValidationError("PED references a parent absent from the pedigree")
-            if members[parent].family_id != member.family_id:
-                raise InputValidationError("PED parent and child have different family identifiers")
-
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(individual: str) -> None:
-        if individual in visiting:
-            raise InputValidationError("PED contains an ancestry cycle")
-        if individual in visited:
-            return
-        visiting.add(individual)
-        for parent in members[individual].parents:
-            visit(parent)
-        visiting.remove(individual)
-        visited.add(individual)
-
-    for individual in members:
-        visit(individual)
-    return members
 
 
 def _verify_loco_identity(document: dict[str, Any], sample: str, review_sha256: str) -> None:
@@ -332,7 +260,7 @@ def verify_family_resources(config: BuildConfig) -> dict[str, Any]:
         raise InputValidationError("family joint VCF SHA-256 mismatch")
     if pedigree_sha != family.pedigree_expected_sha256:
         raise InputValidationError("family PED SHA-256 mismatch")
-    members = _parse_pedigree(family.pedigree)
+    members = parse_pedigree(family.pedigree)
     if config.sample not in members:
         raise InputValidationError("configured sample is absent from the family PED")
     subject = members[config.sample]
@@ -1345,7 +1273,7 @@ def build_family_evidence(
     assert family.joint_vcf_expected_sha256 is not None
     assert family.pedigree is not None
     assert family.pedigree_expected_sha256 is not None
-    members = _parse_pedigree(family.pedigree)
+    members = parse_pedigree(family.pedigree)
     subject = members[config.sample]
     forbidden_identifiers = tuple(
         sorted(

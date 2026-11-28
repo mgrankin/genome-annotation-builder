@@ -808,6 +808,7 @@ def assemble_bundle(
             "status": "PASS",
             "input_sha256": preflight["input"]["sha256"],
             "explicit_gt_alleles": ingest_summary["explicit_gt_alleles"],
+            "native_carried_no_call_alleles": ingest_summary["native_carried_no_call_alleles"],
             "accepted_source_alleles": ingest_summary["accepted_evidence_multiset"],
             "normalized_output_alleles": variant_summary["source_allele_multiset"],
             "unique_source_alleles": variant_summary["unique_source_alleles"],

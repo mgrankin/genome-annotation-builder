@@ -6,6 +6,7 @@ import json
 import shutil
 from dataclasses import replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -49,13 +50,11 @@ def _verify_outputs(stage: Path, summary: dict[str, Any]) -> None:
             raise GenomeBuilderError(f"checkpoint output digest mismatch: {target}")
 
 
-def _reuse_stage(
-    stage: Path, summary_name: str, *, expected_run_key: str | None = None
-) -> dict[str, Any] | None:
+def _reuse_stage(stage: Path, summary_name: str, *, expected_run_key: str) -> dict[str, Any] | None:
     if not stage.exists():
         return None
     summary = _load_json(stage / summary_name)
-    if expected_run_key is not None and summary.get("build_run_key") != expected_run_key:
+    if summary.get("build_run_key") != expected_run_key:
         raise GenomeBuilderError(
             f"checkpoint belongs to a different or unknown build: {stage}. "
             "Use a fresh work directory or move this checkpoint aside to rebuild it."
@@ -154,6 +153,8 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
             },
         }
     )[:20]
+    config = replace(config, build_run_key=run_key)
+    reuse_stage = partial(_reuse_stage, expected_run_key=run_key)
     run_root = config.work_dir / f"run-{run_key}"
     run_root.mkdir(parents=True, exist_ok=True)
     runtime_path = run_root / "runtime.json"
@@ -193,14 +194,14 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
 
     _runtime(runtime_path, run_key, "preflight_complete", 5)
     ingest_stage = run_root / "01-ingest"
-    ingest = _reuse_stage(ingest_stage, "ingest_summary.json")
+    ingest = reuse_stage(ingest_stage, "ingest_summary.json")
     if ingest is None:
         _runtime(runtime_path, run_key, "ingesting_reference_confidence_vcf", 10)
         ingest = ingest_reference_confidence_vcf(config, preflight["input"]["sha256"], ingest_stage)
     _runtime(runtime_path, run_key, "ingest_complete", 45)
 
     normalization_stage = run_root / "02-normalization"
-    normalization = _reuse_stage(normalization_stage, "normalization_summary.json")
+    normalization = reuse_stage(normalization_stage, "normalization_summary.json")
     if normalization is None:
         _runtime(runtime_path, run_key, "normalizing_and_atomizing", 50)
         normalization = normalize_projected_vcf(
@@ -212,7 +213,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
     variant_input = normalization_stage / "normalized.vcf.gz"
     if config.vep_enabled:
         vep_stage = run_root / "03-vep"
-        vep_summary = _reuse_stage(vep_stage, "vep_summary.json")
+        vep_summary = reuse_stage(vep_stage, "vep_summary.json")
         if vep_summary is None:
             _runtime(runtime_path, run_key, "annotating_with_vep", 68)
             vep_summary = run_vep_annotation(config, variant_input, vep_stage)
@@ -225,7 +226,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
         _runtime(runtime_path, run_key, "vep_annotation_complete", 78)
 
     variant_stage = run_root / "04-variant-datasets"
-    variants = _reuse_stage(variant_stage, "variant_build_summary.json")
+    variants = reuse_stage(variant_stage, "variant_build_summary.json")
     if variants is None:
         _runtime(runtime_path, run_key, "building_typed_parquet", 80)
         variants = build_variant_datasets(
@@ -246,9 +247,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
     family_evidence_stage: Path | None = None
     if config.family_evidence.enabled:
         family_evidence_stage = run_root / "05-family-evidence"
-        family_evidence = _reuse_stage(
-            family_evidence_stage, "family_evidence_summary.json", expected_run_key=run_key
-        )
+        family_evidence = reuse_stage(family_evidence_stage, "family_evidence_summary.json")
         if family_evidence is None:
             _runtime(runtime_path, run_key, "materializing_family_evidence", 91)
             family_evidence = build_family_evidence(
@@ -263,7 +262,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
     pgs_resource_stage: Path | None = None
     if config.pgs_enabled:
         pgs_resource_stage = run_root / "05-pgs-resources"
-        pgs_resources = _reuse_stage(pgs_resource_stage, "pgs_resource_summary.json")
+        pgs_resources = reuse_stage(pgs_resource_stage, "pgs_resource_summary.json")
         if pgs_resources is None:
             _runtime(runtime_path, run_key, "preparing_pgs_resources", 91)
             pgs_resources = prepare_pgs_resources(config, pgs_resource_stage)
@@ -273,7 +272,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
     pgx_resource_stage: Path | None = None
     if config.pgx.enabled:
         pgx_resource_stage = run_root / "06-pgx-resources"
-        pgx_resources = _reuse_stage(pgx_resource_stage, "pgx_resource_summary.json")
+        pgx_resources = reuse_stage(pgx_resource_stage, "pgx_resource_summary.json")
         if pgx_resources is None:
             _runtime(runtime_path, run_key, "preparing_pgx_resources", 92)
             pgx_resources = prepare_pgx_resources(
@@ -311,7 +310,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
         )
     if target_config.target_catalog_enabled:
         target_callability_stage = run_root / "07-target-callability"
-        target_callability = _reuse_stage(
+        target_callability = reuse_stage(
             target_callability_stage, "target_callability_summary.json"
         )
         if target_callability is None:
@@ -330,7 +329,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
         if pgs_resource_stage is None or target_callability_stage is None:
             raise GenomeBuilderError("PGS scoring requires prepared resources and target evidence")
         pgs_score_stage = run_root / "08-pgs-scoring"
-        pgs_score = _reuse_stage(pgs_score_stage, "pgs_score_summary.json")
+        pgs_score = reuse_stage(pgs_score_stage, "pgs_score_summary.json")
         if pgs_score is None:
             _runtime(runtime_path, run_key, "scoring_polygenic_models", 96)
             pgs_score = score_pgs(
@@ -352,7 +351,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
         if pgx_resource_stage is None or target_callability_stage is None:
             raise GenomeBuilderError("PGx requires prepared resources and target evidence")
         pgx_materialization_stage = run_root / "09-pgx-materialization"
-        pgx_materialization = _reuse_stage(
+        pgx_materialization = reuse_stage(
             pgx_materialization_stage, "pgx_materialization_summary.json"
         )
         if pgx_materialization is None:
@@ -366,7 +365,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
             )
 
         pharmcat_stage = run_root / "10-pharmcat"
-        pharmcat_run = _reuse_stage(pharmcat_stage, "pharmcat_run_summary.json")
+        pharmcat_run = reuse_stage(pharmcat_stage, "pharmcat_run_summary.json")
         if pharmcat_run is None:
             _runtime(runtime_path, run_key, "running_pharmcat_offline", 98)
             pharmcat_run = run_pharmcat(
@@ -377,7 +376,7 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
             )
 
         pgx_projection_stage = run_root / "11-pgx-projection"
-        pgx_projection = _reuse_stage(pgx_projection_stage, "pgx_projection_summary.json")
+        pgx_projection = reuse_stage(pgx_projection_stage, "pgx_projection_summary.json")
         if pgx_projection is None:
             _runtime(runtime_path, run_key, "projecting_pgx_evidence", 98)
             pgx_projection = project_pgx_results(

@@ -318,6 +318,13 @@ class BuildConfig:
     overwrite: bool
     include_input_paths: bool
     include_sample_identifier: bool
+    # Assigned by build_bundle after preflight; never read from the YAML.
+    build_run_key: str | None = None
+
+    @property
+    def checkpoint_identity(self) -> dict[str, str]:
+        """Standalone stage products do not represent an admitted full build."""
+        return {"build_run_key": self.build_run_key} if self.build_run_key is not None else {}
 
     @property
     def bundle_path(self) -> Path:

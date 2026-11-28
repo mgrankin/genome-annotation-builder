@@ -1246,7 +1246,8 @@ def query_bundle(
             evidence_queries = [
                 (
                     "observed_partial_variants",
-                    "SELECT p.*, r.source_info_json, r.other_format_json AS source_other_format_json "
+                    "SELECT p.*, r.reason AS source_evidence_reason, r.source_info_json, "
+                    "r.other_format_json AS source_other_format_json "
                     "FROM observed_partial_variants p "
                     "JOIN reference_evidence r ON r.evidence_id = p.source_id "
                     "WHERE lower(p.variant_id) = lower(?) ORDER BY p.source_ordinal, p.source_alt_index",

@@ -536,6 +536,7 @@ def materialize_pgx_input(
             raise InputValidationError(f"failed to index materialized PGx VCF: {exc}") from exc
         index_path = Path(f"{vcf_path}.tbi")
         summary = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "record_count": record_count,
             "allele_count": allele_count,

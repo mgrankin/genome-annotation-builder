@@ -574,6 +574,7 @@ def prepare_pgs_resources(config: BuildConfig, destination: str | Path) -> dict[
         base_rows, pgs_rows = _merge_targets(config, pgs_targets, combined_targets)
         combined_sha256 = sha256_file(combined_targets)
         summary = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "source": PGS_CATALOG_SOURCE,
             "models": model_summaries,
@@ -1059,6 +1060,7 @@ def score_pgs(
             )
             outputs["prs.parquet"] = sha256_file(prs_path)
         summary = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "model_count": len(model_audits),
             "published_model_count": len(normative_rows),

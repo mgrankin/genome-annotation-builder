@@ -12,6 +12,7 @@ from typing import Any
 
 import pysam
 
+from . import native_observation
 from .config import BuildConfig
 from .constants import STANDARD_CHROMS
 from .errors import InputValidationError
@@ -49,7 +50,7 @@ def _run(command: list[str], environment: dict[str, str]) -> dict[str, Any]:
 
 def _allele_gt(value: Any, field: str) -> tuple[tuple[int | None, ...], bool]:
     text = str(value)
-    if not text or text == "." or ("/" in text and "|" in text):
+    if value is None or not text or ("/" in text and "|" in text):
         raise InputValidationError(f"invalid {field} genotype provenance")
     separator = "|" if "|" in text else "/" if "/" in text else None
     tokens = text.split(separator) if separator is not None else [text]
@@ -69,7 +70,10 @@ def _projected_genotype(record: pysam.VariantRecord) -> tuple[tuple[int | None, 
     expected = tuple(
         None if allele is None else int(allele == source_alt_index) for allele in source_gt
     )
-    if source_alt_index < 1 or 1 not in expected:
+    native_no_call = native_observation.PROJECTION_FLAG in record.info
+    if native_no_call and (source_alt_index != 1 or source_gt != (None,)):
+        raise InputValidationError("invalid native no-call projection during normalization")
+    if source_alt_index < 1 or (1 not in expected and not native_no_call):
         raise InputValidationError("selected ALT is absent from source genotype provenance")
     if projected_gt != expected or projected_phased != source_phased:
         raise InputValidationError("projected GT disagrees with source GT/ALT provenance")
@@ -367,6 +371,7 @@ def normalize_projected_vcf(
         except ValueError as exc:
             raise InputValidationError("bcftools did not return a normalized record count") from exc
         report = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "started_at": started,
             "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),

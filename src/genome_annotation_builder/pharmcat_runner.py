@@ -301,6 +301,7 @@ def run_pharmcat(
         output_files = sorted(path for path in staging.rglob("*") if path.is_file())
         outputs = {str(path.relative_to(staging)): sha256_file(path) for path in output_files}
         summary = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "version": PHARMCAT_VERSION,
             "data_version": str(raw_document["dataVersion"]),

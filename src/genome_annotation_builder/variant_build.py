@@ -15,6 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pysam
 
+from . import native_observation
 from .acmg_evaluator import (
     AcmgSecondaryFindingsEvaluator,
     materialize_acmg_clinical_artifacts,
@@ -119,7 +120,9 @@ def _evaluate_acmg_candidates(config: BuildConfig, normalized_vcf: Path) -> dict
                 sample = record.samples["SAMPLE"]
                 raw_gt = sample.get("GT")
                 gt = tuple(raw_gt) if raw_gt is not None else ()
-                if None in gt and 1 in gt:
+                if None in gt and (
+                    1 in gt or (gt == (None,) and native_observation.PROJECTION_FLAG in record.info)
+                ):
                     # Allele annotations are available separately for an incomplete genotype.
                     continue
                 if len(gt) not in {1, 2} or any(allele not in {0, 1} for allele in gt):
@@ -520,7 +523,10 @@ def build_variant_datasets(
                     gt = tuple(raw_gt) if raw_gt is not None else ()
                     if len(gt) not in {1, 2} or any(allele not in {None, 0, 1} for allele in gt):
                         raise InputValidationError("invalid projected genotype after normalization")
-                    if 1 not in gt:
+                    native_no_call = native_observation.PROJECTION_FLAG in record.info
+                    if native_no_call and gt != (None,):
+                        raise InputValidationError("native no-call observation acquired a genotype")
+                    if 1 not in gt and not native_no_call:
                         raise InputValidationError(
                             "homozygous-reference call reached variants.parquet"
                         )
@@ -562,7 +568,7 @@ def build_variant_datasets(
                                 "rsid": _info_scalar(record, "GAB_RSID")
                                 or (vep_annotation or {}).get("rsid"),
                                 "gt": list(gt),
-                                "phased": bool(sample.phased),
+                                "phased": False if native_no_call else bool(sample.phased),
                                 "source_id": source_id,
                                 "source_record_digest": source_digest,
                                 "source_ordinal": source_ordinal,
@@ -902,6 +908,7 @@ def build_variant_datasets(
         }
 
         summary = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "counters": dict(sorted(counters.items())),
             "source_allele_multiset": actual_multiset,

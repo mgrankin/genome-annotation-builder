@@ -536,6 +536,7 @@ def run_vep_annotation(
         finally:
             handle.close()
         report = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "started_at": started,
             "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),

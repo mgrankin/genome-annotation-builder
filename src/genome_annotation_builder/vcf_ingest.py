@@ -14,6 +14,7 @@ from typing import Any
 
 import pysam
 
+from . import native_observation
 from .arrow_schemas import (
     callable_region_schema,
     non_core_variant_schema,
@@ -24,6 +25,7 @@ from .constants import SYMBOLIC_REFERENCE_ALLELES
 from .errors import InputValidationError
 from .par_scope import source_par_scope
 from .parquet_io import PartitionedParquetWriter
+from .pedigree import parse_pedigree
 from .util import (
     MultisetDigest,
     atomic_output_directory,
@@ -350,6 +352,9 @@ def _build_projection_header(input_header: pysam.VariantHeader) -> pysam.Variant
                 ("Description", description),
             ],
         )
+    header.info.add(
+        native_observation.PROJECTION_FLAG, 0, "Flag", "Native source ALT with missing haploid GT"
+    )
     header.formats.add("GT", number=1, type="String", description="Projected biallelic genotype")
     header.formats.add("DP", number=1, type="Integer", description="Source read depth")
     header.formats.add("GQ", number=1, type="Integer", description="Source genotype quality")
@@ -445,12 +450,17 @@ def ingest_reference_confidence_vcf(
         current_reference = ""
         counters: Counter[str] = Counter()
         explicit_alleles = MultisetDigest()
+        native_no_call_alleles = MultisetDigest()
         accepted_evidence_digest = MultisetDigest()
 
         try:
             par_scope = source_par_scope(
                 source.header, reference_sha256=config.reference_expected_sha256
             )
+            native = native_observation.normalized_native_header(source.header)
+            sex = 0
+            if native and config.family_evidence.enabled and config.family_evidence.pedigree:
+                sex = parse_pedigree(config.family_evidence.pedigree)[config.sample].sex
             with (
                 PartitionedParquetWriter(
                     reference_path, reference_evidence_schema(), partition_field=None
@@ -557,6 +567,29 @@ def ingest_reference_confidence_vcf(
                     )
                     for alt_index in called_indices:
                         explicit_alleles.add(f"{source_id}:a{alt_index}")
+                    native_carried = False
+                    if (
+                        native
+                        and not called_indices
+                        and (not complete or sample.get("NDOS"))
+                        and ("NID" in record.info or "NDOS" in record.format)
+                    ):
+                        native_carried = native_observation.validate_native_no_call(
+                            record.info,
+                            sample,
+                            gt,
+                            alts,
+                            canonical_core_chrom(record.contig) or record.contig,
+                            record.pos,
+                            end_pos,
+                            par_scope,
+                            sex=sex,
+                        )
+                        if native_carried:
+                            called_indices = [1]
+                            native_no_call_alleles.add(f"{source_id}:a1")
+                            # A single missing VCF slot has no separator or phase evidence.
+                            phased = False
                     if not complete:
                         counters["records_no_call"] += 1
                         evidence_writer.write(
@@ -583,7 +616,9 @@ def ingest_reference_confidence_vcf(
                                 source_record_digest=source_digest,
                                 source_ordinal=ordinal,
                                 source_alts=alts,
-                                reason="incomplete_or_absent_GT",
+                                reason=native_observation.REASON
+                                if native_carried
+                                else "incomplete_or_absent_GT",
                             )
                         )
                         if not called_indices:
@@ -668,7 +703,7 @@ def ingest_reference_confidence_vcf(
                         projected_gt = tuple(
                             None if allele is None else int(allele == alt_index) for allele in gt
                         )
-                        if 1 not in projected_gt:
+                        if 1 not in projected_gt and not native_carried:
                             raise InputValidationError(
                                 "internal allele projection lost selected ALT"
                             )
@@ -684,6 +719,8 @@ def ingest_reference_confidence_vcf(
                             output_record.filter.add("PASS")
                         else:
                             output_record.filter.add("GAB_SOURCE_FILTERED")
+                        if native_carried:
+                            output_record.info[native_observation.PROJECTION_FLAG] = True
                         output_record.info["GAB_SOURCE_ID"] = source_id
                         output_record.info["GAB_SOURCE_DIGEST"] = source_digest
                         output_record.info["GAB_SOURCE_ORDINAL"] = ordinal
@@ -751,11 +788,13 @@ def ingest_reference_confidence_vcf(
             raise InputValidationError(f"failed to index projected VCF: {exc}") from exc
 
         summary = {
+            **config.checkpoint_identity,
             "family_par_query_scope": par_scope,
             "status": "PASS",
             "input_sha256": input_sha256,
             "input_basename": config.input_vcf.name,
             "explicit_gt_alleles": explicit_alleles.as_dict(),
+            "native_carried_no_call_alleles": native_no_call_alleles.as_dict(),
             "accepted_evidence_multiset": accepted_evidence_digest.as_dict(),
             "counters": dict(sorted(counters.items())),
             "outputs": {

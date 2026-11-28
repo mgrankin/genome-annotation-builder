@@ -37,6 +37,13 @@ class MultisetDigest:
         self._xor ^= number
         self._sum = (self._sum + number) % UINT256_MODULUS
 
+    def remove(self, value: str) -> None:
+        """Subtract an independently verified member before comparing a subset."""
+        number = int.from_bytes(hashlib.sha256(value.encode("utf-8")).digest(), "big")
+        self.count -= 1
+        self._xor ^= number
+        self._sum = (self._sum - number) % UINT256_MODULUS
+
     def as_dict(self) -> dict[str, int | str]:
         return {
             "count": self.count,

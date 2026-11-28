@@ -15,6 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pysam
 
+from . import native_observation
 from .arrow_schemas import (
     acmg_secondary_findings_evidence_schema,
     callability_schema,
@@ -58,7 +59,7 @@ from .constants import (
     PINNED_UPSTREAM_FILES,
     STRUCTURALLY_COMPLEX_PGX_GENES,
 )
-from .errors import BundleValidationError
+from .errors import BundleValidationError, InputValidationError
 from .pgx_materialize import _resolve_pgx_locus
 from .predictor_doctor import (
     CONTROL_DEFINITION_SHA256,
@@ -72,6 +73,7 @@ from .release_c.portable_model import DOMAINS as RELEASE_C_DOMAINS
 from .release_c.portable_model import PortableEvidenceError
 from .release_c.portable_model import schema_for as release_c_schema_for
 from .util import MultisetDigest, directory_digest, native_pipeline_version, sha256_file
+from .vcf_ingest import source_id_from_digest
 
 PROFILE_PATHS = (
     "field_glossary.json",
@@ -1159,6 +1161,55 @@ def _validate_target_callability(
     return metrics
 
 
+def _validate_native_no_calls(
+    connection: duckdb.DuckDBPyConnection,
+    reconciliation: dict[str, Any],
+    delivered: MultisetDigest,
+    errors: list[str],
+) -> None:
+    """Validate exceptional source observations and separate them from explicit GT slots."""
+    native = MultisetDigest()
+    cursor = connection.execute(
+        "SELECT r FROM reference_evidence r WHERE r.reason = ?", [native_observation.REASON]
+    )
+    while rows := cursor.fetchmany(10_000):
+        for (row,) in rows:
+            try:
+                source_id = source_id_from_digest(
+                    reconciliation["input_sha256"],
+                    row["source_ordinal"],
+                    row["source_record_digest"],
+                )
+                if (
+                    row["evidence_id"] != source_id
+                    or row["state"] != "no_call"
+                    or row["reference_observed"] is not None
+                    or row["callable"] is not False
+                    or row["phased"] is not False
+                    or row["gt"] != [None]
+                    or row["ploidy"] != 1
+                    or not native_observation.validate_native_no_call(
+                        json.loads(row["source_info_json"]),
+                        json.loads(row["other_format_json"]),
+                        row["gt"],
+                        row["source_alts"],
+                        row["chrom"],
+                        row["start_pos"],
+                        row["end_pos"],
+                        reconciliation["family_par_query_scope"],
+                    )
+                ):
+                    raise InputValidationError("invalid native no-call parent")
+            except (TypeError, ValueError, KeyError, AttributeError, InputValidationError):
+                errors.append("invalid native carried ALT in source no-call evidence")
+                return
+            key = f"{source_id}:a1"
+            native.add(key)
+            delivered.remove(key)
+    if reconciliation.get("native_carried_no_call_alleles") != native.as_dict():
+        errors.append("native carried no-call allele multiset differs from source evidence")
+
+
 def _validate_provenance(
     connection: duckdb.DuckDBPyConnection,
     root: Path,
@@ -1202,10 +1253,12 @@ def _validate_provenance(
     if bad_digest or bad_source:
         errors.append("variant provenance contains invalid source identifiers")
 
+    native_supported = native_pipeline_version(pipeline_version) >= (0, 2, 9)
     sources_sql = "SELECT DISTINCT source_id, source_alt_index FROM variant_provenance"
     partial_rows = 0
     if "observed_partial_variants" in views:
-        partial_rows, distinct_partial, bad_partial = connection.execute("""
+        partial_rows, distinct_partial, bad_partial = connection.execute(
+            """
             SELECT count(*), count(DISTINCT (p.source_id, p.source_alt_index, p.variant_id)),
               count(*) FILTER (WHERE
                 r.evidence_id IS NULL OR r.reference_observed IS NOT NULL
@@ -1214,7 +1267,11 @@ def _validate_provenance(
                 OR p.source_alt_index NOT BETWEEN 1 AND len(r.source_alts)
                 OR p.source_alt IS DISTINCT FROM r.source_alts[p.source_alt_index]
                 OR p.phased IS DISTINCT FROM r.phased
-                OR len(p.gt) != 2 OR list_count(p.gt) != 1 OR NOT list_contains(p.gt,1)
+                OR NOT coalesce((
+                    (len(p.gt)=2 AND list_count(p.gt)=1 AND list_contains(p.gt,1))
+                    OR (? AND r.reason=?
+                        AND p.source_alt_index=1 AND p.gt IS NOT DISTINCT FROM [NULL]::TINYINT[])
+                ), false)
                 OR p.gt IS DISTINCT FROM list_transform(r.gt, a -> CASE WHEN a IS NULL THEN NULL ELSE (a=p.source_alt_index)::TINYINT END)
                 OR contains(p.source_gt, '|') IS DISTINCT FROM r.phased
                 OR replace(p.source_gt,'|','/') IS DISTINCT FROM array_to_string(
@@ -1222,7 +1279,9 @@ def _validate_provenance(
                 OR p.variant_id != concat(p.chrom,':',p.pos,':',p.ref,':',p.alt))
             FROM observed_partial_variants p
             LEFT JOIN reference_evidence r ON r.evidence_id=p.source_id AND r.state='no_call'
-        """).fetchone()
+        """,
+            [native_supported, native_observation.REASON],
+        ).fetchone()
         if distinct_partial != partial_rows or bad_partial:
             errors.append(
                 "observed partial alleles differ from source no-call evidence or repeat a projection"
@@ -1250,16 +1309,22 @@ def _validate_provenance(
         errors.append("reconciliation normalized-variant count mismatch")
     if reconciliation.get("observed_partial_variant_rows", 0) != partial_rows:
         errors.append("reconciliation observed partial variant count mismatch")
-    version = re.fullmatch(r"genome-annotation-builder-(\d+)\.(\d+)\.(\d+)", pipeline_version)
-    if "explicit_gt_alleles" in reconciliation or (
-        version and tuple(map(int, version.groups())) >= (0, 2, 6)
+    if "explicit_gt_alleles" in reconciliation or native_pipeline_version(pipeline_version) >= (
+        0,
+        2,
+        6,
     ):
         if "non_core_variants" in views:
-            bad_exclusions = connection.execute("""
+            bad_exclusions = connection.execute(
+                """
                 SELECT count(*) FROM non_core_variants n
                 LEFT JOIN reference_evidence r
                   ON r.state='no_call' AND r.evidence_id=split_part(n.evidence_id, ':a', 1)
-                WHERE NOT coalesce(list_contains(n.source_gt, n.source_alt_index), false)
+                WHERE NOT (coalesce(list_contains(n.source_gt, n.source_alt_index), false)
+                        OR coalesce((? AND r.reason=?
+                            AND n.source_info_json IS NOT DISTINCT FROM r.source_info_json
+                            AND n.other_format_json IS NOT DISTINCT FROM r.other_format_json
+                            AND n.source_alt_index=1 AND n.source_gt IS NOT DISTINCT FROM [NULL]::TINYINT[]),false))
                    OR n.evidence_id IS DISTINCT FROM concat(
                        split_part(n.evidence_id, ':a', 1), ':a', n.source_alt_index)
                    OR (r.evidence_id IS NULL AND list_count(n.source_gt) < len(n.source_gt))
@@ -1272,13 +1337,17 @@ def _validate_provenance(
                        OR n.source_alt_index NOT BETWEEN 1 AND len(r.source_alts)
                        OR n.alt IS DISTINCT FROM r.source_alts[n.source_alt_index]
                        OR r.reference_observed IS NOT NULL OR r.callable IS DISTINCT FROM false))
-            """).fetchone()[0]
+            """,
+                [native_supported, native_observation.REASON],
+            ).fetchone()[0]
             if bad_exclusions:
                 errors.append("excluded alleles differ from source genotype evidence")
             cursor = connection.execute("SELECT evidence_id FROM non_core_variants")
             while batch := cursor.fetchmany(100_000):
                 for (evidence_id,) in batch:
                     multiset.add(evidence_id)
+        if native_supported:
+            _validate_native_no_calls(connection, reconciliation, multiset, errors)
         if reconciliation.get("explicit_gt_alleles") != multiset.as_dict():
             errors.append("normalized and excluded alleles differ from explicit input GT alleles")
     if reconciliation.get("missing_to_reference_conversions") != 0:

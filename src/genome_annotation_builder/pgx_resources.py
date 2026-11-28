@@ -632,6 +632,7 @@ def prepare_pgx_resources(
         counts = merge_target_catalogs(sources, combined_targets)
         combined_sha256 = sha256_file(combined_targets)
         summary = {
+            **config.checkpoint_identity,
             "status": "PASS",
             "pharmcat": pharmcat_summary,
             "cpic": cpic_summary,
