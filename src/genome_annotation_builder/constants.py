@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-PIPELINE_VERSION = "0.2.8"
+PIPELINE_VERSION = "0.2.9"
 SCHEMA_VERSION = "1.1.0"
 GENOME_BUILD = "GRCh38"
 

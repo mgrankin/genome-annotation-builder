@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.9 - 2026-11-28
+
+- Preserve a carried allele from a family native projection when ploidy
+  normalization leaves the personal genotype unknown. The observation can be
+  annotated and queried while genotype-dependent analyses retain the no-call.
+
 ## 0.2.8 - 2026-11-28
 
 - Write an empty, typed clinical findings table when a completed ACMG evaluation
