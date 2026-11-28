@@ -360,7 +360,9 @@ def normalize_projected_vcf(
         ]
         norm_result = _run(norm_command, environment)
         projection = _biallelicize_atomized_bcf(atomized, intermediate)
+        atomized.unlink()
         sort_result = _run(sort_command, environment)
+        intermediate.unlink()
         index_result = _run(
             [config.bcftools, "index", "--tbi", "--force", str(normalized)], environment
         )
@@ -387,8 +389,6 @@ def normalize_projected_vcf(
             "outputs": {
                 "normalized.vcf.gz": sha256_file(normalized),
                 "normalized.vcf.gz.tbi": sha256_file(Path(f"{normalized}.tbi")),
-                "atomized.unsorted.bcf": sha256_file(atomized),
-                "normalized.unsorted.bcf": sha256_file(intermediate),
             },
             "commands": [norm_result, sort_result, index_result],
         }

@@ -454,6 +454,11 @@ def test_ingest_normalize_and_reconcile(tmp_path: Path) -> None:
     normalized_dir = tmp_path / "normalized"
     normalization = normalize_projected_vcf(config, ingest_dir / "projected.vcf.gz", normalized_dir)
     assert normalization["record_count"] == 7
+    assert set(normalization["outputs"]) == {"normalized.vcf.gz", "normalized.vcf.gz.tbi"}
+    assert {p.name for p in normalized_dir.iterdir()} == {
+        *normalization["outputs"],
+        "normalization_summary.json",
+    }
 
     variant_dir = tmp_path / "variant-build"
     built = build_variant_datasets(

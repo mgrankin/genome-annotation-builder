@@ -5,6 +5,9 @@
 - Preserve a carried allele from a family native projection when ploidy
   normalization leaves the personal genotype unknown. The observation can be
   annotated and queried while genotype-dependent analyses retain the no-call.
+- Verify the build identity of each stage before resuming it.
+- Release temporary BCFs as soon as normalization consumes them. The sorted
+  VCF and its index remain available for validation and resumption.
 
 ## 0.2.8 - 2026-11-28
 
