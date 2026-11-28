@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
+from genome_annotation_builder.release_c.caller_receipt import canonical_json_sha256
 from genome_annotation_builder.release_c.mt_adapter import (
     MitochondrialProvenance,
     parse_filtered_mutect_vcf,
@@ -12,10 +14,13 @@ from genome_annotation_builder.release_c.mt_adapter import (
 from genome_annotation_builder.release_c.mt_concordance import (
     MitochondrialReplicatePolicy,
     annotate_mitochondrial_replicate_concordance,
+    read_mitochondrial_parquets,
+    verified_mt_records,
 )
 from genome_annotation_builder.release_c.portable_model import (
     PortableEvidenceError,
     make_evidence_id,
+    write_extension,
 )
 
 from .test_mt_adapter import write_vcf
@@ -197,3 +202,97 @@ def test_two_adapter_outputs_flow_into_mitochondrial_concordance(tmp_path: Path)
     assert len(annotated) == 2
     assert summary["group_relation_counts"] == {"exact_fraction": 1}
     assert summary["row_status_counts"] == {"comparable_concordant": 2}
+
+
+def mt_sibling(row, alt, alt_depth):
+    sibling = {
+        **row,
+        "alt": alt,
+        "alt_depth": alt_depth,
+        "allele_fraction": alt_depth / row["depth"],
+        "event_id": f"mt:chrM:{row['pos']}:{row['ref']}:{alt}",
+    }
+    sibling["evidence_id"] = make_evidence_id("mitochondrial_heteroplasmy", sibling)
+    return sibling
+
+
+@pytest.mark.parametrize(
+    "ref,counts,first_fraction,second_alt,relation",
+    [
+        (0, (100, 900), 0.1, 100, "exact_fraction"),
+        (100, (100, 800), 0.1, 500, "allele_fraction_discordant"),
+    ],
+)
+def test_full_multiallelic_record_depth_controls_replicate_decision(
+    ref, counts, first_fraction, second_alt, relation
+):
+    first = mt_row(
+        "a", ref_depth=ref, alt_depth=counts[0], depth=1000, allele_fraction=first_fraction
+    )
+    sibling = mt_sibling(first, "T", counts[1])
+    second = mt_row(
+        "b",
+        ref_depth=1000 - second_alt,
+        alt_depth=second_alt,
+        depth=1000,
+        allele_fraction=second_alt / 1000,
+    )
+    rows, summary = annotate_mitochondrial_replicate_concordance([sibling, second, first])
+    assert summary["group_relation_counts"] == {relation: 1, "single_source": 1}
+    assert sorted((r["event_id"], r["alt_depth"]) for r in rows) == sorted(
+        (r["event_id"], r["alt_depth"]) for r in (sibling, second, first)
+    )
+    _, subset = annotate_mitochondrial_replicate_concordance(
+        [second, first], complete_records=verified_mt_records([first, sibling])
+    )
+    assert subset["group_relation_counts"] == {"unresolved_allelic_depth": 1}
+
+
+def test_verified_partition_with_unassigned_reads_uses_ad(tmp_path):
+    first = mt_row("a", ref_depth=40, alt_depth=10, depth=1000, allele_fraction=0.2)
+    second = mt_row("b", ref_depth=800, alt_depth=200, depth=1000, allele_fraction=0.2)
+    domain = "mitochondrial_heteroplasmy"
+    table = tmp_path / "mitochondrial.parquet"
+    output = write_extension(domain, [first], table)
+    summary = {
+        "status": "PASS",
+        "allele_rows": 1,
+        "canonical_row_multiset": output["canonical_row_multiset"],
+        "raw_artifact_sha256": first["raw_artifact_sha256"],
+    }
+    report = {
+        "schema_version": 1,
+        "profile_id": "gatk-mitochondria-normal-shifted-4.6.2.0",
+        "status": "PASS",
+        "source_rows_removed": 0,
+        "source_alignment_sha256": first["source_alignment_sha256"],
+        "raw_artifact_sha256": first["raw_artifact_sha256"],
+        "parsing": [{"domain": domain, "summary": summary}],
+        "files": [dict(output, sha256=output["parquet_sha256"], path=table.name)],
+    }
+    sidecar = tmp_path / "adapter-summary.json"
+
+    def sample(expected):
+        complete = set()
+        inputs = read_mitochondrial_parquets([table], complete_records=complete)
+        _, measured = annotate_mitochondrial_replicate_concordance(
+            [*inputs, second], complete_records=complete
+        )
+        assert measured["group_relation_counts"] == {expected: 1}
+
+    sample("unresolved_allelic_depth")
+
+    def save():
+        sidecar.write_text(
+            json.dumps(dict(report, adapter_identity_sha256=canonical_json_sha256(report)))
+        )
+
+    save()
+    sample("exact_fraction")
+    summary["allele_rows"] = 2
+    save()
+    sample("unresolved_allelic_depth")
+    summary["allele_rows"] = 1
+    report["files"][0]["sha256"] = "0" * 64
+    save()
+    sample("unresolved_allelic_depth")

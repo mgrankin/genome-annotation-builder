@@ -399,6 +399,23 @@ unsupported, low-depth, or policy-mismatched observations remain explicitly
 not comparable; non-overlapping intervals are marked discordant and both rows
 are retained for review.
 
+### Mitochondrial replicate fractions
+
+For each exact mitochondrial allele, `gab release-c mt-concordance` compares the
+two technical observations using Wilson intervals on the target ALT depth divided
+by the sum of the native record's allele depths. A multiallelic record contributes
+its reference depth once and the depth of every ALT, including filtered sibling
+alleles. The caller's FORMAT/AF and the original counts remain in the output.
+A singleton stays source-specific.
+
+The subject stage verifies the complete typed adapter output. The standalone CLI
+also recognizes a complete typed partition from its adjacent `adapter-summary.json`
+and checks its file digest and row inventory. For other inputs the supplied
+allele depths must account for FORMAT/DP to resolve the denominator. A missing
+sibling with unexplained depth gives `unresolved_allelic_depth`; low depth after
+resolution gives `insufficient_allelic_depth`. Unassigned reads can make DP
+larger than the sum of AD in a complete native partition.
+
 ## Sequential caller matrix
 
 The default matrix runs seven fixed profiles plus the independently confirmed

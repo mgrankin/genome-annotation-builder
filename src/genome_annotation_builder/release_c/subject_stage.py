@@ -22,7 +22,12 @@ from .extension_stage import (
     validate_release_c_extension_stage,
 )
 from .hla_concordance import annotate_hla_concordance
-from .mt_concordance import annotate_mitochondrial_replicate_concordance
+from .mt_concordance import (
+    MT_DEPTH_POLICY,
+    annotate_mitochondrial_replicate_concordance,
+    complete_mt_partition,
+    verified_mt_records,
+)
 from .pgx_concordance import annotate_pgx_concordance
 from .portable_model import (
     DOMAINS,
@@ -234,6 +239,7 @@ def _apply_concordance(
     *,
     reference_sha256: str,
     forbidden_bindings: tuple[str, ...],
+    complete_mt_records: set[frozenset[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     configurations = _configuration_count(domain, rows)
     if configurations < 2:
@@ -254,10 +260,14 @@ def _apply_concordance(
             "canonical_row_multiset": canonical_row_multiset(validated),
             "private_paths_persisted": False,
         }
+    kwargs = (
+        {"complete_records": complete_mt_records} if domain == "mitochondrial_heteroplasmy" else {}
+    )
     annotated, summary = CONCORDANCE[domain](
         rows,
         expected_reference_sha256=reference_sha256,
         forbidden_bindings=forbidden_bindings,
+        **kwargs,
     )
     if summary.get("source_rows_removed", 0) != 0 or len(annotated) != len(rows):
         _fail("subject_stage_concordance_removed_source_rows")
@@ -278,6 +288,7 @@ def _collect_subject_inputs(
     list[Path],
     dict[str, Any],
     tuple[str, ...],
+    set[frozenset[str]],
 ]:
     if not dataset_ids or len(dataset_ids) != len(set(dataset_ids)):
         _fail("subject_stage_dataset_ids_empty_or_duplicated")
@@ -311,6 +322,7 @@ def _collect_subject_inputs(
             }
         )
     )
+    complete_mt_records: set[frozenset[str]] = set()
     rows_by_domain: dict[str, list[dict[str, Any]]] = {}
     gates: list[Path] = []
     receipts: list[Path] = []
@@ -356,6 +368,10 @@ def _collect_subject_inputs(
             ):
                 _fail("adapter_file_row_boundary_changed")
             if rows:
+                if domain == "mitochondrial_heteroplasmy" and complete_mt_partition(
+                    adapter, metadata, rows
+                ):
+                    complete_mt_records.update(verified_mt_records(rows))
                 rows_by_domain.setdefault(domain, []).extend(rows)
                 job_has_rows = True
         gate = paths["lifecycle"] / "input-gate.json"
@@ -386,7 +402,15 @@ def _collect_subject_inputs(
         "reference_sha256": subject.reference_sha256,
         "jobs": sorted(job_boundaries, key=lambda row: row["ordinal"]),
     }
-    return rows_by_domain, gates, receipts, adapters, private_boundary, forbidden
+    return (
+        rows_by_domain,
+        gates,
+        receipts,
+        adapters,
+        private_boundary,
+        forbidden,
+        complete_mt_records,
+    )
 
 
 def _stage_matches_plan(stage: Path, plan: dict[str, Any]) -> dict[str, Any]:
@@ -427,9 +451,12 @@ def build_subject_stage(
     if any(path.is_symlink() for path in (manifest, matrix_root, work, output)):
         _fail("subject_stage_top_level_path_must_not_be_symlink")
     _disk_gate(work, minimum_free_bytes)
-    rows_by_domain, gates, receipts, adapters, private_plan, forbidden = _collect_subject_inputs(
-        manifest, matrix_root, dataset_ids
+    rows_by_domain, gates, receipts, adapters, private_plan, forbidden, complete_mt_records = (
+        _collect_subject_inputs(manifest, matrix_root, dataset_ids)
     )
+    mt_rows = rows_by_domain.get("mitochondrial_heteroplasmy", [])
+    if len({row["source_alignment_sha256"] for row in mt_rows}) > 1:
+        private_plan["mitochondrial_replicate_depth_policy"] = MT_DEPTH_POLICY
     private_plan.update(
         {
             "work_directory": str(work),
@@ -492,6 +519,7 @@ def build_subject_stage(
             rows,
             reference_sha256=str(private_plan["reference_sha256"]),
             forbidden_bindings=(*forbidden, str(work), str(output)),
+            complete_mt_records=complete_mt_records,
         )
         path = consolidated / f"{domain}.parquet"
         write_extension(

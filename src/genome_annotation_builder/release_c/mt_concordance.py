@@ -13,11 +13,13 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from .caller_receipt import canonical_json_sha256
 from .portable_model import (
     PortableEvidenceError,
     canonical_row_multiset,
     make_evidence_id,
     schema_for,
+    sha256_file,
     validate_rows,
     write_extension,
 )
@@ -43,6 +45,8 @@ MUTABLE_CONCORDANCE_FIELDS = frozenset(
         "concordance_status",
     }
 )
+MT_DEPTH_POLICY = "source_record_ref_plus_all_alt_AD"
+
 BIOLOGICAL_FIELDS = tuple(
     field
     for field in schema_for("mitochondrial_heteroplasmy").names
@@ -75,18 +79,62 @@ def _wilson_interval(alt_depth: int, allelic_depth: int, z: float) -> tuple[floa
     return max(0.0, centre - radius), min(1.0, centre + radius)
 
 
+def _source_records(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    records = defaultdict(list)
+    for row in rows:
+        key = (
+            row["source_alignment_sha256"],
+            row["raw_artifact_sha256"],
+            row["source_record_digest"],
+            row["chrom"],
+            row["pos"],
+            row["ref"],
+        )
+        records[key].append(row)
+    return list(records.values())
+
+
+def verified_mt_records(rows: list[dict[str, Any]]) -> set[frozenset[str]]:
+    """Identify complete sibling sets from an independently verified native partition."""
+    return {frozenset(row["evidence_id"] for row in group) for group in _source_records(rows)}
+
+
+def _allelic_depths(
+    rows: list[dict[str, Any]], complete_records: set[frozenset[str]]
+) -> dict[str, int | None]:
+    """Count REF once across ALT siblings from the same physical Mutect2 record."""
+    result = {}
+    for siblings in _source_records(rows):
+        counts = {(r["depth"], r["ref_depth"]) for r in siblings}
+        if len(counts) != 1:
+            raise PortableEvidenceError(
+                "inconsistent mitochondrial DP or REF depth within one source record"
+            )
+        if len({r["alt"] for r in siblings}) != len(siblings):
+            raise PortableEvidenceError(
+                "one mitochondrial allele has multiple accepted rows from the same alignment"
+            )
+        dp, ref = counts.pop()
+        alt_depths = [r["alt_depth"] for r in siblings]
+        total = None
+        if ref is not None and all(n is not None for n in alt_depths):
+            counted = ref + sum(alt_depths)
+            # A subset can omit sibling ALTs. A complete adapter partition also
+            # resolves the denominator when DP includes unassigned reads.
+            verified = frozenset(row["evidence_id"] for row in siblings) in complete_records
+            if (verified or counted == dp) and (dp is None or counted <= dp):
+                total = counted
+        for row in siblings:
+            result[row["evidence_id"]] = total
+    return result
+
+
 def _observation(
-    row: dict[str, Any], policy: MitochondrialReplicatePolicy
+    row: dict[str, Any], allelic_depth: int | None, policy: MitochondrialReplicatePolicy
 ) -> AlleleFractionObservation | None:
-    ref_depth = row.get("ref_depth")
-    alt_depth = row.get("alt_depth")
-    if ref_depth is None or alt_depth is None:
+    if allelic_depth is None or allelic_depth < policy.minimum_allelic_depth:
         return None
-    ref = int(ref_depth)
-    alt = int(alt_depth)
-    allelic_depth = ref + alt
-    if allelic_depth < policy.minimum_allelic_depth:
-        return None
+    alt = row["alt_depth"]
     lower, upper = _wilson_interval(alt, allelic_depth, policy.wilson_z)
     return AlleleFractionObservation(
         reported_fraction=float(row["allele_fraction"]),
@@ -98,12 +146,9 @@ def _observation(
 
 
 def _pair_relation(
-    first: dict[str, Any],
-    second: dict[str, Any],
-    policy: MitochondrialReplicatePolicy,
+    first_observation: AlleleFractionObservation | None,
+    second_observation: AlleleFractionObservation | None,
 ) -> str:
-    first_observation = _observation(first, policy)
-    second_observation = _observation(second, policy)
     if first_observation is None or second_observation is None:
         return "not_comparable"
     same_reported_fraction = math.isclose(
@@ -159,6 +204,7 @@ def annotate_mitochondrial_replicate_concordance(
     policy: MitochondrialReplicatePolicy = DEFAULT_MT_REPLICATE_POLICY,
     expected_reference_sha256: str | None = None,
     forbidden_bindings: tuple[str, ...] = (),
+    complete_records: set[frozenset[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Annotate exact-allele replicate evidence without averaging or row removal."""
 
@@ -194,6 +240,7 @@ def annotate_mitochondrial_replicate_concordance(
             index
         )
 
+    depths = _allelic_depths(rows, complete_records or set())
     annotated = [dict(row) for row in rows]
     relation_counts: Counter[str] = Counter()
     status_counts: Counter[str] = Counter()
@@ -213,8 +260,9 @@ def annotate_mitochondrial_replicate_concordance(
             for row in component
         }
         circular_audited = all(bool(row["circular_boundary_audited"]) for row in component)
+        observations = [_observation(row, depths[row["evidence_id"]], policy) for row in component]
         pair_relations = [
-            _pair_relation(component[first], component[second], policy)
+            _pair_relation(observations[first], observations[second])
             for first in range(len(component))
             for second in range(first + 1, len(component))
         ]
@@ -229,7 +277,11 @@ def annotate_mitochondrial_replicate_concordance(
             relation = "allele_fraction_discordant"
         elif "not_comparable" in pair_relations:
             status = "not_comparable"
-            relation = "insufficient_allelic_depth"
+            relation = (
+                "unresolved_allelic_depth"
+                if any(depths[row["evidence_id"]] is None for row in component)
+                else "insufficient_allelic_depth"
+            )
         elif pair_relations and all(value == "exact_fraction" for value in pair_relations):
             status = "comparable_concordant"
             relation = "exact_fraction"
@@ -286,6 +338,7 @@ def annotate_mitochondrial_replicate_concordance(
         "status": "PASS",
         "policy": {
             "minimum_allelic_depth": policy.minimum_allelic_depth,
+            "denominator": MT_DEPTH_POLICY,
             "wilson_z": policy.wilson_z,
         },
         "input_rows": len(rows),
@@ -311,7 +364,71 @@ def annotate_mitochondrial_replicate_concordance(
     return validated, summary
 
 
-def read_mitochondrial_parquets(paths: list[Path]) -> list[dict[str, Any]]:
+def complete_mt_partition(
+    report: dict[str, Any], item: dict[str, Any], rows: list[dict[str, Any]]
+) -> bool:
+    """Match a verified output partition to the native parser's complete allele inventory."""
+    parsing = report.get("parsing")
+    if (
+        report.get("schema_version") != 1
+        or report.get("profile_id") != "gatk-mitochondria-normal-shifted-4.6.2.0"
+        or report.get("status") != "PASS"
+        or report.get("source_rows_removed") != 0
+        or not isinstance(parsing, list)
+        or len(parsing) != 1
+        or not isinstance(parsing[0], dict)
+        or parsing[0].get("domain") != "mitochondrial_heteroplasmy"
+    ):
+        return False
+    summary = parsing[0].get("summary")
+    source = (report.get("source_alignment_sha256"), report.get("raw_artifact_sha256"))
+    return (
+        isinstance(summary, dict)
+        and summary.get("status") == "PASS"
+        and summary.get("raw_artifact_sha256") == source[1]
+        and summary.get("allele_rows") == len(rows) == item.get("rows")
+        and summary.get("canonical_row_multiset") == item.get("canonical_row_multiset")
+        and all(
+            (row["source_alignment_sha256"], row["raw_artifact_sha256"]) == source for row in rows
+        )
+    )
+
+
+def _complete_partition(path: Path, rows: list[dict[str, Any]]) -> bool:
+    """Recognize the complete output of one native adapter, including legacy tables."""
+    summary = path.parent / "adapter-summary.json"
+    if not summary.is_file():
+        return False
+    try:
+        report = json.loads(summary.read_bytes())
+    except (ValueError, OSError):
+        return False
+    if not isinstance(report, dict) or not isinstance(report.get("files"), list):
+        return False
+    claimed = report.pop("adapter_identity_sha256", None)
+    files = [
+        item
+        for item in report["files"]
+        if isinstance(item, dict) and item.get("domain") == "mitochondrial_heteroplasmy"
+    ]
+    try:
+        identity = canonical_json_sha256(report)
+    except ValueError:
+        return False
+    if identity != claimed or len(files) != 1:
+        return False
+    item = files[0]
+    return (
+        item.get("path") == path.name
+        and item.get("sha256") == sha256_file(path)
+        and item.get("canonical_row_multiset") == canonical_row_multiset(rows)
+        and complete_mt_partition(report, item, rows)
+    )
+
+
+def read_mitochondrial_parquets(
+    paths: list[Path], *, complete_records: set[frozenset[str]] | None = None
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in paths:
         table = pq.read_table(path)
@@ -319,7 +436,10 @@ def read_mitochondrial_parquets(paths: list[Path]) -> list[dict[str, Any]]:
             raise PortableEvidenceError(
                 "mitochondrial concordance input has the wrong physical schema"
             )
-        rows.extend(table.to_pylist())
+        partition = table.to_pylist()
+        if complete_records is not None and partition and _complete_partition(path, partition):
+            complete_records.update(verified_mt_records(partition))
+        rows.extend(partition)
     return rows
 
 
@@ -335,7 +455,8 @@ def main() -> int:
     )
     parser.add_argument("--wilson-z", type=float, default=DEFAULT_MT_REPLICATE_POLICY.wilson_z)
     args = parser.parse_args()
-    rows = read_mitochondrial_parquets(args.input_parquet)
+    complete_records: set[frozenset[str]] = set()
+    rows = read_mitochondrial_parquets(args.input_parquet, complete_records=complete_records)
     policy = MitochondrialReplicatePolicy(
         minimum_allelic_depth=args.minimum_allelic_depth,
         wilson_z=args.wilson_z,
@@ -343,6 +464,7 @@ def main() -> int:
     annotated, summary = annotate_mitochondrial_replicate_concordance(
         rows,
         policy=policy,
+        complete_records=complete_records,
         expected_reference_sha256=args.reference_sha256,
     )
     output = write_extension(

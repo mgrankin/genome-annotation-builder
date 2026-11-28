@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.10 - 2026-11-28
+
+- Compare mitochondrial technical replicates using the reference and all alternate
+  allele depths from each Mutect2 record. Preserve caller fractions, genotypes,
+  and individual allele counts. Report an unresolved denominator when a subset
+  cannot account for all allele depths.
+
 ## 0.2.9 - 2026-11-28
 
 - Preserve a carried allele from a family native projection when ploidy
