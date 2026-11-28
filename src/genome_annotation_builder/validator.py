@@ -71,7 +71,7 @@ from .release_c.extension_stage import validate_release_c_extension_stage
 from .release_c.portable_model import DOMAINS as RELEASE_C_DOMAINS
 from .release_c.portable_model import PortableEvidenceError
 from .release_c.portable_model import schema_for as release_c_schema_for
-from .util import MultisetDigest, directory_digest, sha256_file
+from .util import MultisetDigest, directory_digest, native_pipeline_version, sha256_file
 
 PROFILE_PATHS = (
     "field_glossary.json",
@@ -2680,11 +2680,9 @@ def _validate_family_evidence(
     if not isinstance(provenance, dict):
         errors.append("family evidence extension lacks resource provenance")
         return {"status": "invalid_provenance", "rows": 0}
-    base_version = str(manifest.get("pipeline_version", "")).partition("+")[0]
-    version = re.fullmatch(r"genome-annotation-builder-(\d+)\.(\d+)\.(\d+)", base_version)
-    if "build_run_key" in provenance or (
-        version and tuple(map(int, version.groups())) >= (0, 2, 7)
-    ):
+    if "build_run_key" in provenance or native_pipeline_version(
+        manifest.get("pipeline_version")
+    ) >= (0, 2, 7):
         stage_key = provenance.get("build_run_key")
         if (
             not isinstance(stage_key, str)
@@ -3550,6 +3548,18 @@ def validate_bundle(
             "clinical_findings.parquet",
             errors,
         )
+    elif native_pipeline_version(manifest.get("pipeline_version")) >= (0, 2, 8):
+        transformations = documents.get("transformations.json")
+        stages = transformations.get("stages") if isinstance(transformations, dict) else None
+        if "acmg_secondary_findings" in manifest.get("resource_provenance", {}) or (
+            isinstance(stages, list)
+            and any(
+                isinstance(stage, dict)
+                and stage.get("stage_id") == "acmg_secondary_findings_policy_evaluation"
+                for stage in stages
+            )
+        ):
+            errors.append("native ACMG evaluation requires clinical_findings.parquet")
     interpretations_path = root / "interpretations.parquet"
     interpretation_rows = 0
     if interpretations_path.exists():

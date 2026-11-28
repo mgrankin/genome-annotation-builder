@@ -22,9 +22,10 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import pyarrow.parquet as pq
 
 from ..constants import SCHEMA_VERSION
-from ..util import directory_digest, sha256_file
+from ..util import directory_digest, native_pipeline_version, sha256_file
 from .portable_model import CHROM_RANK, FORBIDDEN_PORTABLE_TEXT, SHA256
 from .readback_capture import TARGET_COLUMNS
 
@@ -94,13 +95,100 @@ def _atomic_bytes_no_replace(path: Path, payload: bytes, label: str) -> None:
         raise
 
 
+def _check_file_identity(path: Path, spec: object, label: str) -> str:
+    if path.is_symlink() or not path.is_file() or not isinstance(spec, dict):
+        _fail(f"{label}_missing")
+    digest = sha256_file(path)
+    if path.stat().st_size != spec.get("bytes") or digest != spec.get("sha256"):
+        _fail(f"{label}_identity_changed")
+    return digest
+
+
+def _verify_legacy_empty_findings(bundle: Path, manifest: dict[str, Any]) -> None:
+    """Native releases through 0.2.7 omitted the table iff there were no decisions."""
+    producer = native_pipeline_version(manifest.get("pipeline_version"))
+    if not producer or producer >= (0, 2, 8):
+        _fail("clinical_findings_missing")
+
+    files = manifest["files"]
+    documents = {}
+    for name in ("inventory", "transformations"):
+        path = bundle / f"{name}.json"
+        _check_file_identity(path, files.get(path.name), name)
+        documents[name] = _load_json(path, name)
+
+    entries = documents["inventory"].get("entries")
+    stages = documents["transformations"].get("stages")
+    if not isinstance(entries, list) or not all(
+        isinstance(entry, dict) and isinstance(entry.get("path"), str) for entry in entries
+    ):
+        _fail("clinical_findings_inventory_invalid")
+    # The native producer emits one finding and one interpretation for *every*
+    # decision, including decisions that did not pass its actionability gates.
+    decision_outputs = {
+        "clinical_findings.parquet",
+        "interpretations.parquet",
+        "extensions/acmg_secondary_findings_evidence.parquet",
+    }
+    inventory = {entry["path"] for entry in entries}
+    if (
+        not {"variants.parquet", "transformations.json", "extensions/family_evidence.parquet"}
+        <= inventory
+    ):
+        _fail("clinical_findings_inventory_invalid")
+    registered = set(files) | inventory
+    if decision_outputs & registered or any(os.path.lexists(bundle / p) for p in decision_outputs):
+        _fail("clinical_findings_conflicting_inventory")
+
+    if not isinstance(stages, list) or not all(isinstance(stage, dict) for stage in stages):
+        _fail("clinical_findings_evaluation_unproven")
+    acmg = [s for s in stages if s.get("stage_id") == "acmg_secondary_findings_policy_evaluation"]
+    resources = manifest.get("resource_provenance")
+    policy = resources.get("acmg_secondary_findings") if isinstance(resources, dict) else None
+    if len(acmg) != 1 or not isinstance(policy, dict):
+        _fail("clinical_findings_evaluation_unproven")
+    for resource, field in (
+        ("ensembl_vep", "cache_tree_sha256"),
+        ("clinvar", "normalized_vcf_sha256"),
+    ):
+        source = resources.get(resource)
+        identity = source.get(field) if isinstance(source, dict) else None
+        if not isinstance(identity, str) or not SHA256.fullmatch(identity):
+            _fail("clinical_findings_evaluation_unproven")
+    stage = acmg[0]
+    digest = policy.get("canonical_sha256")
+    sources = manifest.get("annotation_sources")
+    if not isinstance(sources, dict) or sources.get("actionability_annotation") != (
+        f"ACMG SF v{policy.get('version')}; ClinGen snapshot {policy.get('snapshot')}; "
+        f"canonical-sha256:{digest}"
+    ):
+        _fail("clinical_findings_evaluation_unproven")
+    zero_counts = (
+        obj.get(field)
+        for obj in (stage, policy)
+        for field in ("decision_rows", "actionable_candidate_variants")
+    )
+    if (
+        stage.get("status") != "completed"
+        or stage.get("software") != "genome-annotation-builder"
+        or stage.get("software_version") != ".".join(map(str, producer))
+        or not isinstance(digest, str)
+        or not SHA256.fullmatch(digest)
+        or not isinstance(stage.get("inputs"), list)
+        or f"sha256:{digest}" not in stage["inputs"]
+        or policy.get("decision_status_counts") != {}
+        or any(type(n) is not int or n != 0 for n in zero_counts)
+    ):
+        _fail("clinical_findings_evaluation_unproven")
+
+
 def _bundle_boundary(bundle: Path) -> dict[str, Any]:
     if bundle.is_symlink() or not bundle.is_dir():
         _fail("source_bundle_invalid")
     manifest_path = bundle / "manifest.json"
     clinical = bundle / "clinical_findings.parquet"
     family = bundle / "extensions/family_evidence.parquet"
-    if not clinical.is_file() or not family.is_dir():
+    if not family.is_dir():
         _fail("source_bundle_required_tables_missing")
     manifest = _load_json(manifest_path, "source_bundle_manifest")
     files = manifest.get("files")
@@ -110,23 +198,26 @@ def _bundle_boundary(bundle: Path) -> dict[str, Any]:
         or not isinstance(files, dict)
     ):
         _fail("source_bundle_manifest_boundary_invalid")
-    clinical_spec = files.get("clinical_findings.parquet")
     variants_spec = files.get("variants.parquet")
     extensions_spec = files.get("extensions")
-    if not all(
-        isinstance(value, dict) for value in (clinical_spec, variants_spec, extensions_spec)
-    ):
+    if not all(isinstance(value, dict) for value in (variants_spec, extensions_spec)):
         _fail("source_bundle_manifest_file_boundary_missing")
-    clinical_sha256 = sha256_file(clinical)
-    if clinical_sha256 != clinical_spec.get(
-        "sha256"
-    ) or clinical.stat().st_size != clinical_spec.get("bytes"):
-        _fail("clinical_findings_identity_changed")
+    if clinical.name in files or os.path.lexists(clinical):
+        spec = files.get(clinical.name)
+        clinical_sha256 = _check_file_identity(clinical, spec, "clinical_findings")
+        rows = spec.get("rows")
+        if rows is not None and (
+            type(rows) is not int or pq.read_metadata(clinical).num_rows != rows
+        ):
+            _fail("clinical_findings_row_count_changed")
+    else:
+        _verify_legacy_empty_findings(bundle, manifest)
+        clinical_sha256 = None
     family_sha256 = directory_digest(family)
     return {
         "manifest": manifest,
         "manifest_sha256": sha256_file(manifest_path),
-        "clinical_path": clinical,
+        "clinical_path": clinical if clinical_sha256 is not None else None,
         "clinical_sha256": clinical_sha256,
         "family_path": family,
         "family_sha256": family_sha256,
@@ -165,15 +256,16 @@ def _candidate_categories(row: Mapping[str, Any], clinical_ids: set[str]) -> lis
 def _select_candidates(boundary: Mapping[str, Any], maximum_targets: int) -> dict[str, Any]:
     if maximum_targets < 1 or maximum_targets > MAXIMUM_ALLOWED_TARGETS:
         _fail("maximum_targets_out_of_range")
-    clinical_path = str(boundary["clinical_path"])
     family_glob = str(Path(boundary["family_path"]) / "chrom=*" / "part-*.parquet")
     connection = duckdb.connect()
     try:
-        clinical_rows = connection.execute(
-            "SELECT DISTINCT variant_id FROM read_parquet(?) WHERE variant_id IS NOT NULL",
-            [clinical_path],
-        ).fetchall()
-        clinical_ids = {str(row[0]) for row in clinical_rows}
+        clinical_ids: set[str] = set()
+        if boundary["clinical_path"] is not None:
+            clinical_rows = connection.execute(
+                "SELECT DISTINCT variant_id FROM read_parquet(?) WHERE variant_id IS NOT NULL",
+                [str(boundary["clinical_path"])],
+            ).fetchall()
+            clinical_ids = {str(row[0]) for row in clinical_rows}
         family_rows = int(
             connection.execute("SELECT count(*) FROM read_parquet(?)", [family_glob]).fetchone()[0]
         )
@@ -345,6 +437,8 @@ def create_readback_targets(
         "subject_identifier_persisted": False,
         "private_paths_persisted": False,
     }
+    if boundary["clinical_sha256"] is None:
+        receipt["source_tables"]["clinical_findings_state"] = "legacy_evaluated_empty"
     receipt["receipt_identity_sha256"] = _canonical_sha256(receipt)
     rendered = json.dumps(receipt, sort_keys=True)
     if FORBIDDEN_PORTABLE_TEXT.search(rendered):
@@ -405,6 +499,21 @@ def validate_readback_targets(
     if identity != _canonical_sha256(receipt):
         _fail("target_receipt_identity_changed")
     receipt["receipt_identity_sha256"] = identity
+    tables = receipt["source_tables"]
+    if not isinstance(tables, dict) or "clinical_findings_sha256" not in tables:
+        _fail("target_receipt_clinical_source_invalid")
+    digest = tables["clinical_findings_sha256"]
+    if digest is None:
+        if tables.get("clinical_findings_state") != "legacy_evaluated_empty" or (
+            receipt["required_clinical_rows"] != 0
+        ):
+            _fail("target_receipt_clinical_source_invalid")
+    elif (
+        not isinstance(digest, str)
+        or not SHA256.fullmatch(digest)
+        or "clinical_findings_state" in tables
+    ):
+        _fail("target_receipt_clinical_source_invalid")
     if target.is_symlink() or not target.is_file():
         _fail("target_manifest_missing")
     if (

@@ -397,3 +397,43 @@ def test_all_bindings_preflight_before_first_caller(
         )
     assert calls["build"] == 2
     assert calls["lifecycle"] == 0
+
+
+def test_default_matrix_uses_the_resource_catalog_readback_version(tmp_path: Path) -> None:
+    manifest, resources, freeze, options = _inputs(tmp_path)
+    current_freeze = json.loads(freeze.read_bytes())
+    metadata = {
+        k: v
+        for k, v in current_freeze.items()
+        if k not in {"profile_catalog", "private_paths_persisted", "manifest_identity_sha256"}
+    }
+    bindings = json.loads(resources.read_bytes())
+    legacy = matrix_runner.LEGACY_READBACK
+    current = matrix_runner.CURRENT_READBACK
+    bindings["profiles"][legacy] = bindings["profiles"].pop(current)
+    _write(resources, bindings)
+    _write(freeze, build_resource_manifest(metadata, catalog_version=1))
+    plan = build_matrix_plan(
+        manifest,
+        resources,
+        freeze,
+        adapter_options_path=options,
+        runtime="docker",
+        user="1000:1000",
+        minimum_free_bytes=1,
+        indexed_probe_bases=1,
+    )
+    ids = [job["profile_id"] for job in plan["jobs"]]
+    assert len(ids) == 16 and ids.count(legacy) == 2 and current not in ids
+    _write(freeze, current_freeze)
+    with pytest.raises(MatrixRunnerError, match="resource_bindings_profile_coverage_incomplete"):
+        build_matrix_plan(
+            manifest,
+            resources,
+            freeze,
+            adapter_options_path=options,
+            runtime="docker",
+            user="1000:1000",
+            minimum_free_bytes=1,
+            indexed_probe_bases=1,
+        )

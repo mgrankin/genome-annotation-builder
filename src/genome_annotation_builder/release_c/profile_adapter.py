@@ -37,7 +37,7 @@ from .portable_model import (
     sha256_file,
     validate_rows,
 )
-from .profile_catalog import resolve_shipped_profile
+from .profile_catalog import CURRENT_READBACK, LEGACY_READBACK, resolve_shipped_profile
 from .readback_adapter import ReadbackProvenance, materialize_readback_capture
 from .spechla_adapter import SpecHLAProvenance, materialize_spechla_results
 
@@ -53,7 +53,8 @@ SUPPORTED_PROFILES = frozenset(
         "hla-la-short-read-1.0.4",
         "spechla-short-read-bam-1.0.12",
         "gatk-mitochondria-normal-shifted-4.6.2.0",
-        "readback-bounded-pysam-0.24.0",
+        LEGACY_READBACK,
+        CURRENT_READBACK,
     }
 )
 HLA_OPTION_FIELDS = frozenset(
@@ -382,13 +383,14 @@ def _materialize(
             forbidden_bindings=forbidden,
         )
         results.append(("mitochondrial_heteroplasmy", output, result))
-    elif profile_id == "readback-bounded-pysam-0.24.0":
+    elif profile_id in {LEGACY_READBACK, CURRENT_READBACK}:
         output = staging / "readback.parquet"
         provenance = ReadbackProvenance(**common, caller_version=version)
         result = materialize_readback_capture(
             components["raw_capture_json"],
             output,
             provenance,
+            allow_empty=profile_id == CURRENT_READBACK,
             forbidden_bindings=forbidden,
         )
         results.append(("read_backed_evidence", output, result))

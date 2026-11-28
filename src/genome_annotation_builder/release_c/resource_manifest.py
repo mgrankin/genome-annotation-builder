@@ -15,7 +15,7 @@ from .portable_model import (
     PortableEvidenceError,
     contains_forbidden_binding,
 )
-from .profile_catalog import build_profile_catalog
+from .profile_catalog import CURRENT_CATALOG_VERSION, build_profile_catalog
 
 RESOURCE_STATUS = {"PASS", "PASS_WITH_DOCUMENTED_LIMITATIONS"}
 METADATA_FIELDS = {
@@ -104,14 +104,19 @@ def _validate_metadata(metadata: dict[str, Any], forbidden: tuple[str, ...]) -> 
 
 
 def build_resource_manifest(
-    metadata: dict[str, Any], *, forbidden_bindings: tuple[str, ...] = ()
+    metadata: dict[str, Any],
+    *,
+    forbidden_bindings: tuple[str, ...] = (),
+    catalog_version: int = CURRENT_CATALOG_VERSION,
 ) -> dict[str, Any]:
     """Bind deployment metadata to the exact caller-profile release."""
 
     _validate_metadata(metadata, forbidden_bindings)
     manifest = {
         **metadata,
-        "profile_catalog": build_profile_catalog(forbidden_bindings=forbidden_bindings),
+        "profile_catalog": build_profile_catalog(
+            forbidden_bindings=forbidden_bindings, catalog_version=catalog_version
+        ),
         "private_paths_persisted": False,
     }
     manifest["manifest_identity_sha256"] = _canonical_sha256(manifest)
@@ -131,7 +136,9 @@ def validate_resource_manifest_payload(
     if manifest.get("private_paths_persisted") is not False:
         raise PortableEvidenceError("resource manifest privacy boundary is invalid")
     catalog = manifest.get("profile_catalog")
-    if catalog != build_profile_catalog(forbidden_bindings=forbidden_bindings):
+    if not isinstance(catalog, dict) or catalog != build_profile_catalog(
+        forbidden_bindings=forbidden_bindings, catalog_version=catalog.get("schema_version")
+    ):
         raise PortableEvidenceError("resource manifest profile catalog changed")
     claimed = manifest.get("manifest_identity_sha256")
     unsigned = dict(manifest)
@@ -181,6 +188,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="operation", required=True)
     create = subparsers.add_parser("create")
+    create.add_argument(
+        "--catalog-version",
+        type=int,
+        choices=(1, CURRENT_CATALOG_VERSION),
+        default=CURRENT_CATALOG_VERSION,
+    )
     create.add_argument("--metadata", type=Path, required=True)
     create.add_argument("--output", type=Path, required=True)
     create.add_argument("--forbidden-bindings-file", type=Path)
@@ -193,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.operation == "create":
             manifest = build_resource_manifest(
                 _load_object(args.metadata, "resource metadata"),
+                catalog_version=args.catalog_version,
                 forbidden_bindings=forbidden,
             )
             _atomic_no_replace(args.output, manifest)

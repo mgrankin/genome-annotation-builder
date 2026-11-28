@@ -38,7 +38,7 @@ from . import (
     profile_catalog,
     project_release,
     readback_adapter,
-    readback_capture,
+    readback_capture_v2,
     readback_concordance,
     readback_targets,
     repeat_concordance,
@@ -107,7 +107,7 @@ COMMANDS: dict[str, tuple[str, Handler]] = {
     "readback-adapter": ("materialize bounded read-back evidence", readback_adapter.main),
     "readback-capture": (
         "capture bounded read evidence without identifiers",
-        readback_capture.main,
+        readback_capture_v2.main,
     ),
     "readback-targets": (
         "select and validate bounded read-back targets",

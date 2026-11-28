@@ -88,3 +88,47 @@ def test_receipt_bound_profile_adapter_materializes_replays_and_detects_tamper(
             "primary",
             profile_id="manta-germline-1.6.0",
         )
+
+
+def test_only_version_two_readback_profile_accepts_canonical_empty_capture(tmp_path: Path) -> None:
+    from genome_annotation_builder.release_c import profile_adapter, readback_capture_v2
+    from genome_annotation_builder.release_c.caller_profile import load_caller_profile
+    from genome_annotation_builder.release_c.portable_model import PortableEvidenceError
+    from genome_annotation_builder.release_c.profile_catalog import (
+        CURRENT_READBACK,
+        LEGACY_READBACK,
+        resolve_shipped_profile,
+    )
+    from genome_annotation_builder.release_c.readback_capture import write_capture
+    from genome_annotation_builder.release_c.readback_targets import _render_targets
+
+    from .test_readback_adapter import build_inputs
+
+    alignment, reference, targets, provenance = build_inputs(tmp_path)
+    targets.write_bytes(_render_targets([]))
+    capture = tmp_path / "empty-capture.json"
+    write_capture(capture, readback_capture_v2.build_capture(alignment, reference, targets))
+    for profile_id in (LEGACY_READBACK, CURRENT_READBACK):
+        context = {
+            "profile": load_caller_profile(resolve_shipped_profile(profile_id)),
+            "components": {"raw_capture_json": capture},
+            "boundary": {
+                field: getattr(provenance, field)
+                for field in (
+                    "reference_sha256",
+                    "caller_run_identity_sha256",
+                    "resource_manifest_sha256",
+                    "source_alignment_sha256",
+                )
+            },
+            "artifact": {"raw_artifact_id": provenance.raw_artifact_id},
+        }
+        args = (profile_id, tmp_path, context, {}, provenance.technical_source_role, {}, ())
+        if profile_id == LEGACY_READBACK:
+            with pytest.raises(PortableEvidenceError):
+                profile_adapter._materialize(*args)
+        else:
+            [(domain, path, result)] = profile_adapter._materialize(*args)
+            assert domain == "read_backed_evidence" and result["status"] == "PASS"
+            assert result["parsing"]["typed_rows"] == 0 and result["output"] is None
+            assert not path.exists()

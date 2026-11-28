@@ -6,7 +6,7 @@
     "hla-la-short-read-1.0.4",
     "spechla-short-read-bam-1.0.12",
     "gatk-mitochondria-normal-shifted-4.6.2.0",
-    "readback-bounded-pysam-0.24.0"
+    "readback-bounded-pysam-0.24.0-v2"
   ],
   "karyotype_profiles": {
     "XX": "expansionhunter-grch38-female-5.0.0",

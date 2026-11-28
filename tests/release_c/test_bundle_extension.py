@@ -250,3 +250,21 @@ def test_bundle_extension_is_atomic_complete_and_preserves_base(
 
     with pytest.raises(PortableEvidenceError, match="refusing to replace"):
         build_enriched_bundle(base, stage, output, validate_base=False)
+
+
+def test_empty_readback_run_is_distinct_from_missing_caller_in_omissions() -> None:
+    from genome_annotation_builder.release_c.bundle_extension import _omission_row
+    from genome_annotation_builder.release_c.readback_capture_v2 import EMPTY_TARGET_SHA256
+
+    evidence = {
+        "domain": "read_backed_evidence",
+        "summary": {
+            "target_manifest_sha256": EMPTY_TARGET_SHA256,
+            "capture_records": 0,
+            "typed_rows": 0,
+        },
+    }
+    with_capture = {"adapter_runs": [{"adapter_summary": {"parsing": [evidence]}}]}
+    reason = _omission_row("read_backed_evidence", with_capture)["reason"]
+    assert "completed bounded read-back" in reason and "zero loci" in reason
+    assert "no validated" in _omission_row("read_backed_evidence", {"adapter_runs": []})["reason"]

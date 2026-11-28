@@ -25,6 +25,8 @@ REQUIRED_SUFFIXES = (
     "release_c/profiles/hla-la-short-read-1.0.4.json",
     "release_c/profiles/manta-germline-1.6.0.json",
     "release_c/profiles/readback-bounded-pysam-0.24.0.json",
+    "release_c/profiles/readback-bounded-pysam-0.24.0-v2.json",
+    "release_c/readback_capture_v2.py",
     "release_c/profiles/spechla-short-read-bam-1.0.12.json",
 )
 FORBIDDEN_PARTS = {

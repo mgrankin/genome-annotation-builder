@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -83,3 +84,53 @@ def test_caller_profile_cli_resolves_a_validated_shipped_profile_id(
     )
     assert caller_profile.main() == 2
     assert "failed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("version", "profile_id", "profile_hash", "catalog_hash"),
+    [
+        (
+            1,
+            "readback-bounded-pysam-0.24.0",
+            "4a1a8d2e478d1158edebbcc496e3a7dd98b706d2f53967e433cd8c4ec1f79080",
+            "5500f314a26eb7148cb5f4fe945460a11e7ddcd20d56ff6274b9e2eacff8d5af",
+        ),
+        (
+            2,
+            "readback-bounded-pysam-0.24.0-v2",
+            "b163b2afcfc402a019dc6c79a18a8b28e27725b9b61abc01b2f51e9b00d92747",
+            "72bcbafb808168ec1bc3176847fca0ac9806cf2ced71d8abad54f1a85ac9a441",
+        ),
+    ],
+)
+def test_explicit_readback_profile_and_catalog_replay(
+    version: int,
+    profile_id: str,
+    profile_hash: str,
+    catalog_hash: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert profile_catalog.main(["--catalog-version", str(version)]) == 0
+    catalog = json.loads(capsys.readouterr().out)
+    assert catalog["profile_count"] == 9 and catalog["catalog_identity_sha256"] == catalog_hash
+    assert [p["profile_id"] for p in catalog["profiles"] if p["gate_caller"] == "readback"] == [
+        profile_id
+    ]
+    monkeypatch.setattr(
+        "sys.argv", ["caller-profile", "validate-profile", "--profile-id", profile_id]
+    )
+    assert caller_profile.main() == 0
+    actual = json.loads(capsys.readouterr().out)
+    assert actual["profile_id"] == profile_id and actual["profile_identity_sha256"] == profile_hash
+    path = profile_catalog.resolve_shipped_profile(profile_id)
+    doc = json.loads(path.read_bytes())
+    assert doc["caller_version"] == str(version)
+    scripts = {m["role"]: m for m in doc["mounts"] if m["container_path"].startswith("/tools/")}
+    entry = "readback_capture_v2" if version == 2 else "readback_capture"
+    assert set(scripts) == ({"readback_capture", entry})
+    assert doc["command_semantics"]["steps"][1]["arguments"][0] == "{" + entry + "}"
+    for mount in scripts.values():
+        filename = Path(mount["container_path"]).name
+        shipped = path.parent.parent / filename
+        assert hashlib.sha256(shipped.read_bytes()).hexdigest() == mount["expected_sha256"]

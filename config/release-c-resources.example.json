@@ -1,7 +1,7 @@
 {
   "dataset_profiles": {
     "TECHNICAL_DATASET_01": {
-      "readback-bounded-pysam-0.24.0": {
+      "readback-bounded-pysam-0.24.0-v2": {
         "roles": {
           "target_manifest": {
             "path": "../local/targets/dataset-01.tsv"
@@ -93,10 +93,13 @@
     "manta-germline-1.6.0": {
       "roles": {}
     },
-    "readback-bounded-pysam-0.24.0": {
+    "readback-bounded-pysam-0.24.0-v2": {
       "roles": {
         "readback_capture": {
           "path": "../local/tools/readback_capture.py"
+        },
+        "readback_capture_v2": {
+          "path": "../local/tools/readback_capture_v2.py"
         }
       }
     },

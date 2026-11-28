@@ -441,3 +441,74 @@ def test_readback_replicate_discordance_is_review_not_a_vote(tmp_path: Path) -> 
         "REPLICATE:READBACK_ALT_FRACTION_DISCORDANT" in row["filter_reasons"] for row in annotated
     )
     assert {row["alt_reads"] for row in annotated} == {0, 15}
+
+
+def test_canonical_empty_selection_runs_and_materializes_no_optional_table(tmp_path: Path) -> None:
+    from genome_annotation_builder.release_c import readback_capture_v2 as v2
+    from genome_annotation_builder.release_c.readback_targets import _render_targets
+
+    alignment, reference, targets, provenance = build_inputs(tmp_path)
+    # Every ordinary capture still uses the original pileup and byte contract.
+    assert v2.build_capture(alignment, reference, targets) == build_capture(
+        alignment, reference, targets
+    )
+    targets.write_bytes(_render_targets([]))
+    assert sha256_file(targets) == v2.EMPTY_TARGET_SHA256
+    with pytest.raises(readback_capture.CaptureError, match="target_manifest_empty"):
+        build_capture(alignment, reference, targets)
+    payload = v2.build_capture(alignment, reference, targets)
+    assert payload["records"] == [] and payload["record_count"] == 0
+    capture = tmp_path / "capture.json"
+    write_capture(capture, payload)
+    output = tmp_path / "unused.parquet"
+    raw = materialize_readback_capture(capture, output, provenance)
+    direct = materialize_readback_targets(alignment, reference, targets, output, provenance)
+    for result in (raw, direct):
+        assert result["output"] is None
+        assert (
+            result["parsing"]["typed_rows"] == result["parsing"]["record_reconciliation_delta"] == 0
+        )
+        assert result["parsing"]["assessment_status_counts"]["no_eligible_reads"] == 0
+        assert result["parsing"]["canonical_row_multiset"]["count"] == 0
+    assert not output.exists()
+    with pytest.raises(PortableEvidenceError, match="profile conflicts"):
+        materialize_readback_capture(capture, output, provenance, allow_empty=False)
+    output.write_bytes(b"older data")
+    with pytest.raises(PortableEvidenceError, match="existing extension conflicts"):
+        materialize_readback_capture(capture, output, provenance)
+    assert output.read_bytes() == b"older data"
+
+
+def test_empty_readback_rejects_damaged_targets_capture_and_inputs(tmp_path: Path) -> None:
+    from genome_annotation_builder.release_c import readback_capture_v2 as v2
+
+    alignment, reference, targets, provenance = build_inputs(tmp_path)
+    capture = tmp_path / "missing-capture.json"
+    with pytest.raises(PortableEvidenceError):
+        parse_readback_capture(capture, provenance)
+    for data in (b"", b"invalid\n", v2.EMPTY_TARGET_MANIFEST + b"\n"):
+        targets.write_bytes(data)
+        with pytest.raises(readback_capture.CaptureError):
+            v2.build_capture(alignment, reference, targets)
+        with pytest.raises(PortableEvidenceError):
+            parse_readback_targets(alignment, reference, targets, provenance)
+    targets.write_bytes(v2.EMPTY_TARGET_MANIFEST)
+    payload = v2.build_capture(alignment, reference, targets)
+    write_capture(capture, {**payload, "target_manifest_sha256": "f" * 64})
+    with pytest.raises(PortableEvidenceError, match="digest or profile"):
+        parse_readback_capture(capture, provenance)
+    capture.unlink()
+    write_capture(capture, {**payload, "record_count": True})
+    with pytest.raises(PortableEvidenceError, match="cardinality"):
+        parse_readback_capture(capture, provenance)
+    Path(str(alignment) + ".bai").unlink()
+    with pytest.raises(readback_capture.CaptureError, match="index_unusable"):
+        v2.build_capture(alignment, reference, targets)
+    with pytest.raises(PortableEvidenceError, match="usable index"):
+        parse_readback_targets(alignment, reference, targets, provenance)
+    pysam.index(str(alignment))
+    Path(str(reference) + ".fai").unlink()
+    with pytest.raises(readback_capture.CaptureError, match="reference_index_unusable"):
+        v2.build_capture(alignment, reference, targets)
+    with pytest.raises(PortableEvidenceError, match="indexed read-back reference"):
+        parse_readback_targets(alignment, reference, targets, provenance)

@@ -13,7 +13,11 @@ from typing import Any
 from .caller_profile import load_caller_profile
 from .portable_model import PortableEvidenceError
 
-EXPECTED_PROFILE_IDENTITIES: Mapping[str, str] = {
+LEGACY_READBACK = "readback-bounded-pysam-0.24.0"
+CURRENT_READBACK = "readback-bounded-pysam-0.24.0-v2"
+CURRENT_CATALOG_VERSION = 2
+
+LEGACY_PROFILE_IDENTITIES: Mapping[str, str] = {
     "cnvpytor-combined-rd-baf-1.3.2.json": (
         "63874b343264e8ae5c858f865e6c53aafd8d5ba0f5668492a8549c40d50e1e33"
     ),
@@ -43,6 +47,16 @@ EXPECTED_PROFILE_IDENTITIES: Mapping[str, str] = {
     ),
 }
 
+EXPECTED_PROFILE_IDENTITIES: Mapping[str, str] = {
+    **{
+        name: digest
+        for name, digest in LEGACY_PROFILE_IDENTITIES.items()
+        if name != f"{LEGACY_READBACK}.json"
+    },
+    f"{CURRENT_READBACK}.json": "b163b2afcfc402a019dc6c79a18a8b28e27725b9b61abc01b2f51e9b00d92747",
+}
+_CATALOGS = {1: LEGACY_PROFILE_IDENTITIES, CURRENT_CATALOG_VERSION: EXPECTED_PROFILE_IDENTITIES}
+
 
 def _canonical_sha256(value: object) -> str:
     encoded = json.dumps(
@@ -58,6 +72,7 @@ def build_profile_catalog(
     profile_root: str | Path | None = None,
     *,
     forbidden_bindings: Sequence[str] = (),
+    catalog_version: int = CURRENT_CATALOG_VERSION,
 ) -> dict[str, Any]:
     """Fail closed on profile omission, addition, content drift, or privacy leakage."""
 
@@ -70,8 +85,11 @@ def build_profile_catalog(
         raise PortableEvidenceError("shipped caller-profile directory is unavailable")
     paths = sorted(root.glob("*.json"), key=lambda path: path.name)
     actual = {path.name for path in paths}
-    expected = set(EXPECTED_PROFILE_IDENTITIES)
-    if actual != expected:
+    if type(catalog_version) is not int or catalog_version not in _CATALOGS:
+        raise PortableEvidenceError("unknown caller-profile catalog version")
+    selected = _CATALOGS[catalog_version]
+    shipped = {**LEGACY_PROFILE_IDENTITIES, **EXPECTED_PROFILE_IDENTITIES}
+    if actual != set(shipped) and (profile_root is None or actual != set(selected)):
         raise PortableEvidenceError("shipped caller-profile set differs from the release boundary")
 
     profiles: list[dict[str, Any]] = []
@@ -80,13 +98,15 @@ def build_profile_catalog(
         if path.is_symlink() or not path.is_file():
             raise PortableEvidenceError("shipped caller profile is not a regular file")
         profile = load_caller_profile(path, forbidden_bindings=forbidden_bindings)
-        if profile.identity_sha256 != EXPECTED_PROFILE_IDENTITIES[path.name]:
+        if profile.identity_sha256 != shipped[path.name]:
             raise PortableEvidenceError("shipped caller-profile identity differs")
         summary = profile.portable_summary()
         profile_id = str(summary["profile_id"])
         if profile_id in profile_ids:
             raise PortableEvidenceError("shipped caller-profile ID is duplicated")
         profile_ids.add(profile_id)
+        if path.name not in selected:
+            continue
         profiles.append(
             {
                 "profile_file": path.name,
@@ -94,7 +114,7 @@ def build_profile_catalog(
             }
         )
     payload = {
-        "schema_version": 1,
+        "schema_version": catalog_version,
         "status": "PASS",
         "profile_count": len(profiles),
         "profiles": profiles,
@@ -107,7 +127,9 @@ def build_profile_catalog(
 def resolve_shipped_profile(profile_id: str) -> Path:
     """Resolve one validated public profile ID for internal CLI use."""
 
-    catalog = build_profile_catalog()
+    catalog = build_profile_catalog(
+        catalog_version=1 if profile_id == LEGACY_READBACK else CURRENT_CATALOG_VERSION
+    )
     matches = [row for row in catalog["profiles"] if row["profile_id"] == profile_id]
     if len(matches) != 1:
         raise PortableEvidenceError("shipped caller-profile ID is unknown or duplicated")
@@ -118,9 +140,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate and list the exact read-backed caller profiles in this release."
     )
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--catalog-version", type=int, choices=tuple(_CATALOGS), default=CURRENT_CATALOG_VERSION
+    )
+    args = parser.parse_args(argv)
     try:
-        print(json.dumps(build_profile_catalog(), indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                build_profile_catalog(catalog_version=args.catalog_version),
+                indent=2,
+                sort_keys=True,
+            )
+        )
     except (OSError, ValueError, PortableEvidenceError):
         print("error: caller_profile_catalog_invalid", file=sys.stderr)
         return 2

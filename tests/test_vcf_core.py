@@ -1684,3 +1684,55 @@ def test_partial_allele_annotations_consume_normal_vep_csq(tmp_path: Path) -> No
             "SELECT DISTINCT gene.symbol, consequence.most_severe, len(consequence.all_annotations) FROM read_parquet(?)",
             [str(path)],
         ).fetchall() == [("CONTROL", "missense_variant", 1)]
+
+
+def test_evaluated_zero_decisions_registers_typed_empty_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from genome_annotation_builder.acmg_evaluator import AcmgSecondaryFindingsEvaluator
+    from genome_annotation_builder.acmg_resources import verify_vendor_acmg_snapshot
+    from genome_annotation_builder.arrow_schemas import clinical_finding_schema
+
+    config, vcf = _environment(tmp_path)
+    digest = hashlib.sha256(vcf.read_bytes()).hexdigest()
+    ingest = ingest_reference_confidence_vcf(config, digest, tmp_path / "ingest")
+    normalize_projected_vcf(config, tmp_path / "ingest/projected.vcf.gz", tmp_path / "normalized")
+    evaluation = AcmgSecondaryFindingsEvaluator(verify_vendor_acmg_snapshot()).finalize()
+    monkeypatch.setattr(
+        "genome_annotation_builder.variant_build._evaluate_acmg_candidates", lambda *_: evaluation
+    )
+    out = tmp_path / "variants"
+    result = build_variant_datasets(
+        config,
+        tmp_path / "normalized/normalized.vcf.gz",
+        digest,
+        ingest["accepted_evidence_multiset"],
+        out,
+    )
+    path = out / "clinical_findings.parquet"
+    assert pq.read_metadata(path).num_rows == 0
+    assert pq.read_schema(path) == clinical_finding_schema()
+    assert result["outputs"][path.name] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_current_native_bundle_rejects_declared_acmg_without_a_table(tmp_path: Path) -> None:
+    config, _ = _environment(tmp_path, family=True)
+    sync_pinned_resources(config)
+    assert build_bundle(config)["validation"]["valid"]
+    manifest = config.bundle_path / "manifest.json"
+    metadata = json.loads(manifest.read_bytes())
+    assert not (config.bundle_path / "clinical_findings.parquet").exists()
+    metadata["resource_provenance"]["acmg_secondary_findings"] = {
+        "decision_rows": 0,
+        "actionable_candidate_variants": 0,
+        "decision_status_counts": {},
+    }
+    manifest.write_text(json.dumps(metadata))
+    with pytest.raises(
+        BundleValidationError, match="native ACMG evaluation requires clinical_findings"
+    ):
+        validate_bundle(config.bundle_path)
+    with pytest.raises(
+        BundleValidationError, match="native ACMG evaluation requires clinical_findings"
+    ):
+        build_bundle(config)

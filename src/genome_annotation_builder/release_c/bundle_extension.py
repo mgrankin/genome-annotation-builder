@@ -19,6 +19,7 @@ from ..util import atomic_output_directory, atomic_write_json, directory_digest,
 from ..validator import validate_bundle
 from .extension_stage import MANIFEST_FILENAME, validate_release_c_extension_stage
 from .portable_model import DOMAINS, PortableEvidenceError, schema_for
+from .readback_capture_v2 import EMPTY_TARGET_SHA256
 
 RELEASE_C_SCHEMA_VERSION = 1
 RELEASE_C_PROFILE_VERSION = "1.0.0"
@@ -360,9 +361,20 @@ def _augment_transformations(
     return {**document, "stages": [*stages, stage]}
 
 
-def _omission_row(domain: str) -> dict[str, str]:
+def _omission_row(domain: str, stage_manifest: dict[str, Any]) -> dict[str, str]:
     scope = DOMAIN_OMISSIONS[domain]
-    if domain == "complex_pharmacogenes":
+    if domain == "read_backed_evidence" and any(
+        row.get("domain") == domain
+        and row["summary"].get("target_manifest_sha256") == EMPTY_TARGET_SHA256
+        and row["summary"].get("capture_records") == 0
+        for run in stage_manifest.get("adapter_runs", [])
+        for row in run["adapter_summary"]["parsing"]
+    ):
+        reason = (
+            "a completed bounded read-back capture received a verified target list with zero loci"
+        )
+        recovery = "select specific loci for an additional bounded read-back assessment when needed"
+    elif domain == "complex_pharmacogenes":
         reason = "no licence-accepted, checksum-pinned complex-pharmacogene caller was configured"
         recovery = (
             "accept the applicable caller licence, configure an exact pinned profile, and rebuild"
@@ -438,7 +450,7 @@ def _augment_omissions(document: dict[str, Any], stage_manifest: dict[str, Any])
     if any(isinstance(row, dict) and row.get("scope") in release_c_scopes for row in retained):
         raise PortableEvidenceError("base omissions already contain Release-C domain rows")
     missing = sorted(set(DOMAINS) - set(stage_manifest["domains"]))
-    retained.extend(_omission_row(domain) for domain in missing)
+    retained.extend(_omission_row(domain, stage_manifest) for domain in missing)
     portable_scope_omission = _portable_core_scope_omission(stage_manifest)
     if portable_scope_omission is not None:
         retained.append(portable_scope_omission)

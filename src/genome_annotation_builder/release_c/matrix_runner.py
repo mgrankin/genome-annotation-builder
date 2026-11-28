@@ -30,7 +30,12 @@ from .profile_adapter import (
     materialize_profile_adapter,
     validate_profile_adapter_output,
 )
-from .profile_catalog import build_profile_catalog, resolve_shipped_profile
+from .profile_catalog import (
+    CURRENT_READBACK,
+    LEGACY_READBACK,
+    build_profile_catalog,
+    resolve_shipped_profile,
+)
 from .resource_manifest import validate_resource_manifest_payload
 
 MATRIX_SCHEMA_VERSION = 1
@@ -44,7 +49,7 @@ DEFAULT_FIXED_PROFILES = (
     "hla-la-short-read-1.0.4",
     "spechla-short-read-bam-1.0.12",
     "gatk-mitochondria-normal-shifted-4.6.2.0",
-    "readback-bounded-pysam-0.24.0",
+    CURRENT_READBACK,
 )
 DEFAULT_KARYOTYPE_PROFILES = {
     "XX": "expansionhunter-grch38-female-5.0.0",
@@ -135,11 +140,14 @@ def _timestamp() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _load_matrix_config(path: Path | None) -> dict[str, Any]:
+def _load_matrix_config(path: Path | None, catalog_version: int) -> dict[str, Any]:
     if path is None:
         return {
             "schema_version": MATRIX_SCHEMA_VERSION,
-            "fixed_profiles": list(DEFAULT_FIXED_PROFILES),
+            "fixed_profiles": [
+                LEGACY_READBACK if catalog_version == 1 and p == CURRENT_READBACK else p
+                for p in DEFAULT_FIXED_PROFILES
+            ],
             "karyotype_profiles": dict(DEFAULT_KARYOTYPE_PROFILES),
         }
     config = _load_object(path, "matrix_config")
@@ -254,9 +262,15 @@ def build_matrix_plan(
     resources = _load_object(resources_file, "resource_bindings")
     resource_manifest = _load_object(resource_manifest_file, "resource_manifest")
     options = _load_object(options_file, "adapter_options") if options_file else None
-    config = _load_matrix_config(matrix_file)
     datasets = _validate_manifest_datasets(manifest)
-    catalog = build_profile_catalog()
+    declared = resource_manifest.get("profile_catalog")
+    if not isinstance(declared, dict):
+        _fail("resource_manifest_profile_catalog_boundary_mismatch")
+    try:
+        catalog = build_profile_catalog(catalog_version=declared.get("schema_version"))
+    except PortableEvidenceError as exc:
+        raise MatrixRunnerError("resource_manifest_profile_catalog_boundary_mismatch") from exc
+    config = _load_matrix_config(matrix_file, catalog["schema_version"])
     catalog_ids = {str(row["profile_id"]) for row in catalog["profiles"]}
     _validate_matrix_config(config, catalog_ids)
     if runtime not in {"docker", "podman"} or re.fullmatch(r"[0-9]+:[0-9]+", user) is None:

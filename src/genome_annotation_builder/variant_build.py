@@ -813,20 +813,19 @@ def build_variant_datasets(
                     write_statistics=True,
                     version="2.6",
                 )
-            if clinical_artifacts["clinical_findings"]:
-                findings_table = pa.Table.from_pylist(
-                    clinical_artifacts["clinical_findings"],
-                    schema=clinical_finding_schema(),
-                )
-                pq.write_table(
-                    findings_table,
-                    clinical_findings_path,
-                    compression="zstd",
-                    compression_level=9,
-                    use_dictionary=True,
-                    write_statistics=True,
-                    version="2.6",
-                )
+            findings_table = pa.Table.from_pylist(
+                clinical_artifacts["clinical_findings"],
+                schema=clinical_finding_schema(),
+            )
+            pq.write_table(
+                findings_table,
+                clinical_findings_path,
+                compression="zstd",
+                compression_level=9,
+                use_dictionary=True,
+                write_statistics=True,
+                version="2.6",
+            )
             if clinical_artifacts["interpretations"]:
                 interpretations_table = pa.Table.from_pylist(
                     clinical_artifacts["interpretations"],

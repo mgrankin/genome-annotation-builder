@@ -356,6 +356,15 @@ gab release-c readback-targets validate \
   --bundle output/sample.genome
 ```
 
+Builder 0.2.8 publishes a typed, zero-row clinical findings table when a
+completed ACMG evaluation produces no decisions. For an older native bundle
+that omitted the table, the selector checks the registered inventory,
+transformation and policy provenance before setting
+`source_tables.clinical_findings_state` to `legacy_evaluated_empty` and
+`clinical_findings_sha256` to null. An evaluated zero leaves family review
+signals eligible for selection. Each variant linked by a finding remains
+mandatory, including findings from nonactionable decisions.
+
 The selector rejects a source whose family-evidence cardinality no longer
 matches `variants.parquet`, refuses to truncate clinical findings, and uses
 no-overwrite publication. The receipt binds the exact bundle manifest,
@@ -364,11 +373,15 @@ persisting neither a subject identifier nor a local path. The target TSV and
 receipt still reveal genotype-specific coordinates and therefore remain
 private.
 
-Bind the target TSV to the `readback-bounded-pysam-0.24.0` profile, run one
+Bind the target TSV to the `readback-bounded-pysam-0.24.0-v2` profile, run one
 caller lifecycle for each independent technical alignment, and feed the raw
 capture JSON to `readback-adapter`. A target absent from the capture, a
 no-call, or insufficient fragment evidence is never converted to a reference
-genotype.
+genotype. A canonical header-only target TSV still runs the caller against the
+indexed alignment and reference. The caller produces a raw capture with zero
+records. The adapter records zero typed rows, zero targets with no eligible
+reads and the raw artifact digest. The optional evidence table is omitted.
+The v1 catalog and its original capture remain available for historical runs.
 
 When two independent alignments use the same target manifest, annotate their
 finite local observations without averaging or voting:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -13,6 +14,13 @@ from typing import Any, BinaryIO
 
 CHUNK_SIZE = 8 * 1024 * 1024
 UINT256_MODULUS = 1 << 256
+
+
+def native_pipeline_version(pipeline_version: object) -> tuple[int, ...]:
+    """Return the native producer version, including for a Release C enriched base."""
+    base = str(pipeline_version).partition("+")[0]
+    version = re.fullmatch(r"genome-annotation-builder-(\d+)\.(\d+)\.(\d+)", base)
+    return tuple(map(int, version.groups())) if version else ()
 
 
 class MultisetDigest:

@@ -235,6 +235,11 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
             ingest["accepted_evidence_multiset"],
             variant_stage,
         )
+    if config.acmg_sf_enabled and "clinical_findings.parquet" not in variants.get("outputs", {}):
+        raise GenomeBuilderError(
+            "ACMG variant checkpoint lacks the registered clinical findings table; "
+            "move the variant checkpoint aside to rebuild it"
+        )
     _runtime(runtime_path, run_key, "variant_datasets_complete", 90)
 
     family_evidence: dict[str, Any] | None = None

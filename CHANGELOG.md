@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.8 - 2026-11-28
+
+- Write an empty, typed clinical findings table when a completed ACMG evaluation
+  produces zero decisions. Release C read-back also recognizes this outcome in
+  older native bundles with verified evaluation provenance and inventory.
+- Capture a verified zero-target selection under the version 2 read-back
+  profile and retain its completed caller and adapter receipts.
+
 ## 0.2.7 - 2026-11-28
 
 - Resolve which parent transmitted an ALT when the complete autosomal trio

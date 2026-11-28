@@ -18,6 +18,7 @@ from .portable_model import (
     CHROM_RANK,
     CONCRETE_ALLELE,
     SHA256,
+    SOURCE_ROLES,
     PortableEvidenceError,
     canonical_row_multiset,
     make_evidence_id,
@@ -25,17 +26,9 @@ from .portable_model import (
     validate_rows,
     write_extension,
 )
+from .readback_capture import TARGET_COLUMNS
+from .readback_capture_v2 import EMPTY_TARGET_SHA256
 
-TARGET_COLUMNS = [
-    "target_id",
-    "chrom",
-    "pos",
-    "ref",
-    "alt",
-    "candidate_category",
-    "local_complexity_status",
-    "local_haplotype_status",
-]
 CIGAR_SOFT_CLIP = 4
 CIGAR_INSERTION = 1
 CIGAR_DELETION = 2
@@ -136,8 +129,8 @@ def _read_targets(path: str | Path) -> tuple[list[Target], str]:
         raise PortableEvidenceError("cannot read the read-back target manifest") from exc
     except csv.Error as exc:
         raise PortableEvidenceError("malformed read-back target manifest") from exc
-    if not raw_rows:
-        raise PortableEvidenceError("read-back target manifest is empty")
+    if not raw_rows and target_sha256 != EMPTY_TARGET_SHA256:
+        raise PortableEvidenceError("empty read-back target manifest identity differs")
     targets: list[Target] = []
     seen_ids: set[str] = set()
     seen_alleles: set[tuple[str, int, str, str]] = set()
@@ -487,6 +480,8 @@ def parse_readback_targets(
     if sha256_file(Path(reference_fasta)) != provenance.reference_sha256:
         raise PortableEvidenceError("read-back reference SHA-256 differs from provenance")
     targets, target_manifest_sha256 = _read_targets(target_manifest)
+    if not targets and not Path(str(reference_fasta) + ".fai").is_file():
+        raise PortableEvidenceError("empty selection requires an indexed read-back reference")
     try:
         reference = pysam.FastaFile(str(reference_fasta))
         alignment = pysam.AlignmentFile(
@@ -503,6 +498,8 @@ def parse_readback_targets(
     try:
         if not alignment.has_index():
             raise PortableEvidenceError("read-back alignment lacks a usable index")
+        if not targets and not reference.references:
+            raise PortableEvidenceError("empty selection requires a usable read-back reference")
         for target in targets:
             alignment_contig = _alignment_contig(target.chrom, alignment.references)
             reference_contig = _alignment_contig(target.chrom, reference.references)
@@ -610,12 +607,7 @@ def parse_readback_targets(
         row["raw_artifact_sha256"] = raw_artifact_sha256
         row["evidence_id"] = make_evidence_id("read_backed_evidence", row)
     private_bindings = (*forbidden_bindings, *sorted(sample_bindings))
-    validated = validate_rows(
-        "read_backed_evidence",
-        rows_without_artifact,
-        expected_reference_sha256=provenance.reference_sha256,
-        forbidden_bindings=private_bindings,
-    )
+    validated = _validate_readback_rows(rows_without_artifact, provenance, private_bindings)
     summary = {
         "schema_version": 1,
         "status": "PASS",
@@ -646,6 +638,60 @@ def parse_readback_targets(
     return validated, summary
 
 
+def _validate_readback_rows(
+    rows: list[dict[str, Any]], provenance: ReadbackProvenance, forbidden: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    if rows:
+        return validate_rows(
+            "read_backed_evidence",
+            rows,
+            expected_reference_sha256=provenance.reference_sha256,
+            forbidden_bindings=forbidden,
+        )
+    for digest in (
+        provenance.reference_sha256,
+        provenance.caller_run_identity_sha256,
+        provenance.resource_manifest_sha256,
+        provenance.source_alignment_sha256,
+    ):
+        if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+            raise PortableEvidenceError("empty read-back selection lacks valid provenance")
+    raw_id = provenance.raw_artifact_id
+    if (
+        provenance.technical_source_role not in SOURCE_ROLES
+        or not isinstance(raw_id, str)
+        or not raw_id.strip()
+        or "/" in raw_id
+        or "\\" in raw_id
+        or any(value and value in raw_id for value in forbidden)
+    ):
+        raise PortableEvidenceError(
+            "empty read-back selection has an invalid source or artifact ID"
+        )
+    return []
+
+
+def _materialize(
+    rows: list[dict[str, Any]],
+    parsing: dict[str, Any],
+    output_parquet: str | Path,
+    provenance: ReadbackProvenance,
+    forbidden: tuple[str, ...],
+) -> dict[str, Any]:
+    output = None
+    if rows:
+        output = write_extension(
+            "read_backed_evidence",
+            rows,
+            output_parquet,
+            expected_reference_sha256=provenance.reference_sha256,
+            forbidden_bindings=forbidden,
+        )
+    elif Path(output_parquet).exists() or Path(output_parquet).is_symlink():
+        raise PortableEvidenceError("existing extension conflicts with empty read-back selection")
+    return {"status": "PASS", "parsing": parsing, "output": output}
+
+
 def materialize_readback_targets(
     alignment_path: str | Path,
     reference_fasta: str | Path,
@@ -664,14 +710,7 @@ def materialize_readback_targets(
         policy=policy,
         forbidden_bindings=forbidden_bindings,
     )
-    output = write_extension(
-        "read_backed_evidence",
-        rows,
-        output_parquet,
-        expected_reference_sha256=provenance.reference_sha256,
-        forbidden_bindings=forbidden_bindings,
-    )
-    return {"status": "PASS", "parsing": parsing, "output": output}
+    return _materialize(rows, parsing, output_parquet, provenance, forbidden_bindings)
 
 
 def _capture_policy(value: Any) -> ReadbackPolicy:
@@ -743,6 +782,7 @@ def parse_readback_capture(
     capture_json: str | Path,
     provenance: ReadbackProvenance,
     *,
+    allow_empty: bool = True,
     forbidden_bindings: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Convert one receipt-bound OCI capture into portable typed rows."""
@@ -790,12 +830,17 @@ def parse_readback_capture(
     record_count = payload.get("record_count")
     if (
         not isinstance(records, list)
-        or not records
         or isinstance(record_count, bool)
         or not isinstance(record_count, int)
         or record_count != len(records)
     ):
         raise PortableEvidenceError("read-back capture record cardinality differs")
+    if (not records) != (target_manifest_sha256 == EMPTY_TARGET_SHA256) or (
+        not records and not allow_empty
+    ):
+        raise PortableEvidenceError(
+            "read-back capture target digest or profile conflicts with its record count"
+        )
     raw_artifact_sha256 = sha256_file(capture_path)
     expected_metric_fields = set(_empty_metrics(policy))
     expected_record_fields = {
@@ -912,12 +957,7 @@ def parse_readback_capture(
         }
         row["evidence_id"] = make_evidence_id("read_backed_evidence", row)
         rows.append(row)
-    validated = validate_rows(
-        "read_backed_evidence",
-        rows,
-        expected_reference_sha256=provenance.reference_sha256,
-        forbidden_bindings=forbidden_bindings,
-    )
+    validated = _validate_readback_rows(rows, provenance, forbidden_bindings)
     summary = {
         "schema_version": 1,
         "status": "PASS",
@@ -952,21 +992,16 @@ def materialize_readback_capture(
     output_parquet: str | Path,
     provenance: ReadbackProvenance,
     *,
+    allow_empty: bool = True,
     forbidden_bindings: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     rows, parsing = parse_readback_capture(
         capture_json,
         provenance,
+        allow_empty=allow_empty,
         forbidden_bindings=forbidden_bindings,
     )
-    output = write_extension(
-        "read_backed_evidence",
-        rows,
-        output_parquet,
-        expected_reference_sha256=provenance.reference_sha256,
-        forbidden_bindings=forbidden_bindings,
-    )
-    return {"status": "PASS", "parsing": parsing, "output": output}
+    return _materialize(rows, parsing, output_parquet, provenance, forbidden_bindings)
 
 
 def main() -> int:
@@ -983,6 +1018,7 @@ def main() -> int:
     parser.add_argument("--resource-manifest-sha256", required=True)
     parser.add_argument("--source-alignment-sha256", required=True)
     parser.add_argument("--raw-artifact-id", required=True)
+    parser.add_argument("--caller-version", default="1")
     parser.add_argument("--minimum-mapping-quality", type=int, default=20)
     parser.add_argument("--minimum-base-quality", type=int, default=20)
     parser.add_argument("--minimum-alt-fragments", type=int, default=3)
@@ -996,6 +1032,7 @@ def main() -> int:
         resource_manifest_sha256=args.resource_manifest_sha256,
         source_alignment_sha256=args.source_alignment_sha256,
         raw_artifact_id=args.raw_artifact_id,
+        caller_version=args.caller_version,
     )
     if args.capture_json is not None:
         if args.reference_fasta is not None or args.target_manifest is not None:
