@@ -419,6 +419,12 @@ completed and only strict adapter materialization failed, the retry revalidates
 and reuses that immutable caller receipt in the same attempt; it does not rerun
 the expensive caller.
 
+For a fresh HLA*LA run, the matrix can reclaim the two temporary paired FASTQ
+files produced by Picard. It tracks them in the new attempt workspace and
+removes them after validating the typed HLA result. The extracted BAM, unpaired
+reads, raw HLA table and typed result stay available for inspection. Failed
+attempts, existing workspaces and validation-only replays retain their files.
+
 After completion, validate every checkpoint without creating new work:
 
 ```bash

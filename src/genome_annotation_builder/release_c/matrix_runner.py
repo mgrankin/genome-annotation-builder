@@ -10,10 +10,12 @@ import re
 import shutil
 import tempfile
 from collections import Counter
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import hla_scratch
 from .binding_builder import build_caller_bindings, validate_caller_bindings
 from .caller_lifecycle import run_caller_lifecycle
 from .extension_stage import ACCEPTED_PRIVATE_MANIFEST_STATES
@@ -564,6 +566,7 @@ def run_release_c_matrix(
 
     # Compile and verify every binding before the first expensive caller starts.
     # This catches a missing late-matrix resource without wasting earlier calls.
+    fresh_hla = {}
     for plan_job, state in zip(plan["jobs"], runtime_state["jobs"], strict=True):
         paths = _attempt_paths(root, plan_job["ordinal"], state["attempt"])
         if validate_only and not _checkpoint_complete(paths):
@@ -590,6 +593,10 @@ def run_release_c_matrix(
             elif validate_only:
                 _fail("validate_only_missing_binding_checkpoint")
             else:
+                if plan_job["profile_id"] == "hla-la-short-read-1.0.4":
+                    fresh_hla[plan_job["ordinal"]] = hla_scratch.new_workspace(
+                        paths["caller_workspace"]
+                    )
                 build_caller_bindings(
                     manifest,
                     str(plan_job["dataset_id"]),
@@ -626,6 +633,7 @@ def run_release_c_matrix(
         runtime_state["state"] = "running"
         runtime_state["active_job_ordinal"] = plan_job["ordinal"]
         _save_runtime(runtime_path, runtime_state)
+        handles = ExitStack()
         try:
             _free_space_gate(root, minimum_free_bytes)
             lifecycle_report = run_caller_lifecycle(
@@ -639,6 +647,19 @@ def run_release_c_matrix(
                 indexed_probe_bases=indexed_probe_bases,
                 forbidden_binding_file=forbidden_file,
             )
+            mates = None
+            identity = fresh_hla.get(plan_job["ordinal"])
+            # Native preparation admits only an empty caller workspace. A replay
+            # may have a valid receipt without having produced either mate here.
+            if identity is not None and {"prepared_run", "execution_report"}.issubset(
+                lifecycle_report["resume"]["created_checkpoints"]
+            ):
+                artifact = _load_object(
+                    paths["lifecycle"] / "plan/artifact-spec.json", "artifact_spec"
+                )
+                mates = hla_scratch.snapshot_mates(
+                    paths["caller_workspace"], identity, artifact, handles
+                )
             state["last_completed_stage"] = "caller_lifecycle"
             state["lifecycle_identity_sha256"] = lifecycle_report["lifecycle_identity_sha256"]
             _save_runtime(runtime_path, runtime_state)
@@ -677,6 +698,7 @@ def run_release_c_matrix(
                 }
             )
             _save_runtime(runtime_path, runtime_state)
+            hla_scratch.remove_validated_mates(mates)
         except BaseException as exc:
             state.update(
                 {
@@ -691,6 +713,8 @@ def run_release_c_matrix(
             raise MatrixRunnerError(
                 f"matrix_job_{plan_job['ordinal']:04d}_failed; inspect private runtime"
             ) from exc
+        finally:
+            handles.close()
 
     runtime_state["state"] = "complete"
     runtime_state["active_job_ordinal"] = None
