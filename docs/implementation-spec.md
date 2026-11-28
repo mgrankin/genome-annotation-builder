@@ -297,7 +297,10 @@ pedigree. A consistent 1/1 child is `inherited_biparental`. For a 0/1 child
 with two carrier parents, a 1/1 father or mother must supply the ALT. Two 0/1
 parents leave that transmission ambiguous. Allele order and phase-set labels
 carry no assumption about parent of origin. Earlier bundles retain the
-inheritance states calculated by their recorded Builder version. Caller-provided
+inheritance states calculated by their recorded Builder version. Family evidence
+checkpoints produced since 0.2.7 record the build run key. Resume verifies this
+key and the Parquet digest. An older or unrelated checkpoint can be moved aside
+to rebuild the family stage while retaining the original. Caller-provided
 conflict or de-novo classes may lower confidence or trigger review, but cannot
 modify GT.
 

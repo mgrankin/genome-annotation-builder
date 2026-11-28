@@ -49,10 +49,17 @@ def _verify_outputs(stage: Path, summary: dict[str, Any]) -> None:
             raise GenomeBuilderError(f"checkpoint output digest mismatch: {target}")
 
 
-def _reuse_stage(stage: Path, summary_name: str) -> dict[str, Any] | None:
+def _reuse_stage(
+    stage: Path, summary_name: str, *, expected_run_key: str | None = None
+) -> dict[str, Any] | None:
     if not stage.exists():
         return None
     summary = _load_json(stage / summary_name)
+    if expected_run_key is not None and summary.get("build_run_key") != expected_run_key:
+        raise GenomeBuilderError(
+            f"checkpoint belongs to a different or unknown build: {stage}. "
+            "Use a fresh work directory or move this checkpoint aside to rebuild it."
+        )
     _verify_outputs(stage, summary)
     return summary
 
@@ -234,11 +241,14 @@ def build_bundle(config: BuildConfig) -> dict[str, Any]:
     family_evidence_stage: Path | None = None
     if config.family_evidence.enabled:
         family_evidence_stage = run_root / "05-family-evidence"
-        family_evidence = _reuse_stage(family_evidence_stage, "family_evidence_summary.json")
+        family_evidence = _reuse_stage(
+            family_evidence_stage, "family_evidence_summary.json", expected_run_key=run_key
+        )
         if family_evidence is None:
             _runtime(runtime_path, run_key, "materializing_family_evidence", 91)
             family_evidence = build_family_evidence(
                 config,
+                run_key=run_key,
                 variant_dir=variant_stage,
                 destination=family_evidence_stage,
             )

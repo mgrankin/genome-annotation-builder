@@ -2680,6 +2680,18 @@ def _validate_family_evidence(
     if not isinstance(provenance, dict):
         errors.append("family evidence extension lacks resource provenance")
         return {"status": "invalid_provenance", "rows": 0}
+    base_version = str(manifest.get("pipeline_version", "")).partition("+")[0]
+    version = re.fullmatch(r"genome-annotation-builder-(\d+)\.(\d+)\.(\d+)", base_version)
+    if "build_run_key" in provenance or (
+        version and tuple(map(int, version.groups())) >= (0, 2, 7)
+    ):
+        stage_key = provenance.get("build_run_key")
+        if (
+            not isinstance(stage_key, str)
+            or not re.fullmatch(r"[0-9a-f]{20}", stage_key)
+            or stage_key != manifest["resource_provenance"].get("build_run_key")
+        ):
+            errors.append("family evidence checkpoint does not match the bundle build run")
     for key in ("joint_vcf_sha256", "pedigree_sha256"):
         if not _is_sha256(provenance.get(key)):
             errors.append(f"family evidence provenance has invalid {key}")

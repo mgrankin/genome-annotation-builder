@@ -22,6 +22,7 @@ from genome_annotation_builder.clinvar_parser import SortedClinVarLookup
 from genome_annotation_builder.config import load_config
 from genome_annotation_builder.errors import (
     BundleValidationError,
+    GenomeBuilderError,
     InputValidationError,
     ReconciliationError,
 )
@@ -1051,6 +1052,46 @@ def test_family_evidence_is_subject_only_and_exactly_reconciled(tmp_path: Path) 
     )
     assert family_summary["loco"]["materialization"]["matched_genotype_discordant"] == 2
     assert family_summary["loco"]["materialization"]["source_order_inversions_normalized"] == 1
+
+
+def test_family_checkpoint_resume_binds_the_producing_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = _environment(tmp_path, family=True)
+    sync_pinned_resources(config)
+    built = build_bundle(config)
+    run_key = built["run_key"]
+    stage = config.work_dir / f"run-{run_key}" / "05-family-evidence"
+    saved_stage = tmp_path / "original-family-stage"
+    stage.rename(saved_stage)
+    resumed_config = replace(config, bundle_name="resumed.genome")
+    for other_key in (None, "0" * 20):
+        shutil.copytree(saved_stage, stage)
+        summary_path = stage / "family_evidence_summary.json"
+        summary = json.loads(summary_path.read_bytes())
+        assert summary.pop("build_run_key") == run_key
+        if other_key is not None:
+            summary["build_run_key"] = other_key
+        summary_path.write_text(json.dumps(summary))
+        with pytest.raises(
+            GenomeBuilderError, match="checkpoint belongs to a different or unknown"
+        ):
+            build_bundle(resumed_config)
+        assert not resumed_config.bundle_path.exists()
+        shutil.rmtree(stage)
+    saved_stage.rename(stage)
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_family_evidence",
+        lambda *args, **kwargs: pytest.fail("family stage unexpectedly rebuilt"),
+    )
+    assert build_bundle(resumed_config)["validation"]["valid"]
+    manifest_path = resumed_config.bundle_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    assert manifest["resource_provenance"]["family_evidence"].pop("build_run_key") == run_key
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(BundleValidationError, match="family evidence checkpoint"):
+        validate_bundle(resumed_config.bundle_path, reference_fasta=config.reference_fasta)
 
 
 def test_family_loco_unscorable_source_projection_and_sparse_counters(tmp_path: Path) -> None:

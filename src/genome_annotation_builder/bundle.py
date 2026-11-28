@@ -2922,6 +2922,7 @@ def assemble_bundle(
             }
         if family_evidence_summary is not None:
             resource_provenance["family_evidence"] = {
+                "build_run_key": family_evidence_summary["build_run_key"],
                 "source_version": family_evidence_summary["source_version"],
                 "snapshot_date": family_evidence_summary["snapshot_date"],
                 "joint_vcf_sha256": family_evidence_summary["joint_vcf_sha256"],

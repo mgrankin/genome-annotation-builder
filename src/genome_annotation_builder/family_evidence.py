@@ -1332,6 +1332,7 @@ def _make_row(
 def build_family_evidence(
     config: BuildConfig,
     *,
+    run_key: str,
     variant_dir: str | Path,
     destination: str | Path,
 ) -> dict[str, Any]:
@@ -1481,6 +1482,7 @@ def build_family_evidence(
         )
         summary = {
             "status": "PASS",
+            "build_run_key": run_key,
             "source_version": family.source_version,
             "snapshot_date": family.snapshot_date.isoformat(),
             "joint_vcf_sha256": family.joint_vcf_expected_sha256,

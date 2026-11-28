@@ -5,6 +5,8 @@
 - Resolve which parent transmitted an ALT when the complete autosomal trio
   genotypes determine it. A consistent homozygous ALT child is recorded as
   `inherited_biparental`. The parental carrier observations remain available.
+- Bind family-evidence checkpoints to the producing build during resume and
+  bundle validation. Previously published bundles remain readable.
 
 ## 0.2.6 - 2026-11-28
 
