@@ -304,3 +304,83 @@ def test_dictionary_semantic_mismatch_fails_even_with_matching_digest(tmp_path: 
     assert json.loads(output.read_text(encoding="utf-8"))["error_code"] == (
         "reference_index_dictionary_boundary_mismatch"
     )
+
+
+@pytest.mark.parametrize(("format_name", "baf_index_type"), [("bam", "tbi"), ("cram", "csi")])
+def test_gate_uses_detached_indexes_without_creating_source_sidecars(
+    tmp_path: Path, format_name: str, baf_index_type: str
+) -> None:
+    manifest_path, manifest = make_inputs(tmp_path)
+    dataset = manifest["datasets"][0]
+    reference = manifest["reference"]
+    fasta = Path(reference["fasta_path"])
+    indexes = tmp_path / "validated [indexes]"
+    indexes.mkdir()
+    alignment = Path(dataset["original_markdup_bam"]["path"])
+    alignment_key = "original_markdup_bam"
+    if format_name == "cram":
+        cram = tmp_path / "alignment.cram"
+        run(["samtools", "view", "-C", "-T", str(fasta), "-o", str(cram), str(alignment)])
+        alignment = cram
+        alignment_key = "bqsr_cram"
+    else:
+        Path(dataset[alignment_key]["index_path"]).unlink()
+    alignment_index = indexes / "alignment index"
+    run(["samtools", "index", "-o", str(alignment_index), str(alignment)])
+    dataset[alignment_key] = file_spec(alignment, alignment_index)
+    manifest["caller_alignment_policy"]["cnvpytor"] = alignment_key
+
+    baf = Path(dataset["baf_vcf"]["path"])
+    Path(dataset["baf_vcf"]["index_path"]).unlink()
+    baf_index = indexes / "variant index"
+    run(["bcftools", "index", f"--{baf_index_type}", "-o", str(baf_index), str(baf)])
+    dataset["baf_vcf"].update(file_spec(baf, baf_index))
+    adjacent_fai = Path(reference["fai_path"])
+    reference["fai_path"] = str(adjacent_fai.rename(indexes / "reference index"))
+    write_json(manifest_path, manifest)
+
+    report = run_input_gate(
+        manifest_path,
+        SYNTHETIC_DATASET,
+        "cnvpytor",
+        tmp_path / "result.json",
+        policy=InputGatePolicy(minimum_free_bytes=1),
+    )
+    assert report["selected_alignment"]["indexed_probe_records"] == 2
+    assert report["baf_vcf"]["records"] == 1
+    assert not adjacent_fai.exists()
+    assert not Path(f"{alignment}.crai" if format_name == "cram" else f"{alignment}.bai").exists()
+    assert not Path(f"{baf}.{baf_index_type}").exists()
+
+
+@pytest.mark.parametrize(
+    ("role", "failure"),
+    [
+        ("reference", "reference_index_query_failed"),
+        ("original_markdup_bam", "alignment_index_query_failed"),
+        ("baf_vcf", "baf_vcf_index_query_failed"),
+    ],
+)
+def test_good_adjacent_index_cannot_mask_broken_declared_index(
+    tmp_path: Path, role: str, failure: str
+) -> None:
+    manifest_path, manifest = make_inputs(tmp_path)
+    broken = tmp_path / "declared index"
+    if role == "reference":
+        broken.write_text("1\t200\t9999\t200\t201\n", encoding="ascii")
+        manifest["reference"].update(
+            fai_path=str(broken), fai_bytes=broken.stat().st_size, fai_sha256=sha256_file(broken)
+        )
+    else:
+        broken.write_bytes(b"unreadable index\n")
+        spec = manifest["datasets"][0][role]
+        spec.update(file_spec(Path(spec["path"]), broken))
+    write_json(manifest_path, manifest)
+    with pytest.raises(InputGateFailure, match=failure):
+        run_input_gate(
+            manifest_path,
+            SYNTHETIC_DATASET,
+            "cnvpytor",
+            tmp_path / "result.json",
+            policy=InputGatePolicy(minimum_free_bytes=1),
+        )

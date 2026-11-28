@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5 - 2026-11-28
+
+- Use the declared alignment, reference and BAF indexes during Release C input
+  checks. Indexes can live in separate directories, and stale adjacent indexes
+  no longer mask a broken declared index.
+
 ## 0.2.4 - 2026-11-28
 
 - Reclaim the two temporary Picard mate FASTQs after a fresh Release C HLA*LA

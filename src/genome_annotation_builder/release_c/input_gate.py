@@ -10,6 +10,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -158,14 +160,23 @@ def _parse_dictionary(path: Path) -> list[tuple[str, int]]:
     return rows
 
 
-def _alignment_header(
-    alignment: Path, reference: Path
-) -> tuple[str | None, list[str], list[tuple[str, int]]]:
-    command = ["samtools", "view", "-H"]
-    if alignment.suffix.lower() == ".cram":
-        command.extend(["-T", str(reference)])
-    command.append(str(alignment))
-    completed = _run(command)
+@contextmanager
+def _indexed_path(data: Path, index: Path, name: str, index_suffix: str) -> Iterator[Path]:
+    """Expose only the declared pair to tools that discover sidecars by filename."""
+    with tempfile.TemporaryDirectory() as directory:
+        local = Path(directory) / name
+        local.symlink_to(data.resolve())
+        Path(f"{local}{index_suffix}").symlink_to(index.resolve())
+        if index_suffix == ".fai":
+            # HTSlib also uses a block-offset index for BGZF references.
+            gzi = Path(f"{data}.gzi")
+            if gzi.is_file():
+                Path(f"{local}.gzi").symlink_to(gzi.resolve())
+        yield local
+
+
+def _alignment_header(alignment: Path) -> tuple[str | None, list[str], list[tuple[str, int]]]:
+    completed = _run(["samtools", "view", "-H", str(alignment)])
     if completed.returncode:
         _fail("alignment_header_unreadable")
     sort_order = None
@@ -380,7 +391,7 @@ def run_input_gate(
             _fail("alignment_index_digest_changed")
         if _run(["samtools", "quickcheck", "-vv", str(alignment)]).returncode:
             _fail("alignment_quickcheck_failed")
-        sort_order, samples, alignment_contigs = _alignment_header(alignment, reference)
+        sort_order, samples, alignment_contigs = _alignment_header(alignment)
         if sort_order != "coordinate":
             _fail("alignment_not_coordinate_sorted")
         if samples != [logical_subject]:
@@ -393,21 +404,24 @@ def run_input_gate(
             fai_contigs[0],
         )
         probe_region = f"{probe_contig}:1-{min(probe_length, policy.indexed_probe_bases)}"
-        reference_probe = _run(["samtools", "faidx", str(reference), probe_region])
-        reference_probe_lines = reference_probe.stdout.splitlines()
-        expected_probe_bases = min(probe_length, policy.indexed_probe_bases)
-        if (
-            reference_probe.returncode
-            or not reference_probe_lines
-            or not reference_probe_lines[0].startswith(">")
-            or len("".join(reference_probe_lines[1:])) != expected_probe_bases
-        ):
-            _fail("reference_index_query_failed")
-        alignment_probe_command = ["samtools", "view", "-c"]
-        if alignment.suffix.lower() == ".cram":
-            alignment_probe_command.extend(["-T", str(reference)])
-        alignment_probe_command.extend([str(alignment), probe_region])
-        alignment_probe = _run(alignment_probe_command)
+        with _indexed_path(reference, fai, "reference.fa", ".fai") as indexed_reference:
+            reference_probe = _run(["samtools", "faidx", str(indexed_reference), probe_region])
+            reference_probe_lines = reference_probe.stdout.splitlines()
+            expected_probe_bases = min(probe_length, policy.indexed_probe_bases)
+            if (
+                reference_probe.returncode
+                or not reference_probe_lines
+                or not reference_probe_lines[0].startswith(">")
+                or len("".join(reference_probe_lines[1:])) != expected_probe_bases
+            ):
+                _fail("reference_index_query_failed")
+            alignment_probe_command = ["samtools", "view", "-c"]
+            if alignment.suffix.lower() == ".cram":
+                alignment_probe_command.extend(["-T", str(indexed_reference)])
+            alignment_probe_command.extend(
+                ["-X", str(alignment), str(alignment_index), probe_region]
+            )
+            alignment_probe = _run(alignment_probe_command)
         try:
             indexed_probe_records = int(alignment_probe.stdout.strip())
         except ValueError as exc:
@@ -435,7 +449,9 @@ def run_input_gate(
             observed_samples = sample_query.stdout.splitlines()
             if sample_query.returncode or observed_samples != [declared_baf_sample]:
                 _fail("baf_vcf_sample_identity_mismatch")
-            count_query = _run(["bcftools", "index", "-n", str(baf)])
+            # HTSlib detects CSI and TBI by content at the conventional index path.
+            with _indexed_path(baf, baf_index, "baf.vcf.gz", ".csi") as indexed_baf:
+                count_query = _run(["bcftools", "index", "-n", str(indexed_baf)])
             try:
                 baf_records = int(count_query.stdout.strip())
             except ValueError as exc:
